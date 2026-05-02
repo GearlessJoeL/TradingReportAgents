@@ -182,6 +182,7 @@ def send_email_report(
         logger.exception("Failed to send email report: %s", exc)
         return False
 
+    logger.info("Email report sent successfully to %d recipient(s).", len(recipients))
     return True
 
 
