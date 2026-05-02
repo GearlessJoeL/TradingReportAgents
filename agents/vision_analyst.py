@@ -56,12 +56,16 @@ class VisionAnalyst:
         temperature: float = 0.2,
         max_tokens: int = 1200,
     ) -> str:
+        referer = os.getenv("OPENROUTER_HTTP_REFERER", "https://localhost").strip() or "https://localhost"
+        app_title = os.getenv("OPENROUTER_APP_TITLE", "TradingReportAgents").strip() or "TradingReportAgents"
         with httpx.Client(timeout=self.timeout_seconds) as client:
             response = client.post(
                 f"{self.base_url}/chat/completions",
                 headers={
                     "Authorization": f"Bearer {self.api_key}",
                     "Content-Type": "application/json",
+                    "HTTP-Referer": referer,
+                    "X-Title": app_title,
                 },
                 json={
                     "model": model,
@@ -78,7 +82,11 @@ class VisionAnalyst:
                 response.status_code,
                 body_preview,
             )
-        response.raise_for_status()
+            raise httpx.HTTPStatusError(
+                f"{response.status_code} for {response.url} model={model!r} — {body_preview}",
+                request=response.request,
+                response=response,
+            )
         payload = response.json()
         return payload["choices"][0]["message"]["content"]
 
@@ -93,6 +101,11 @@ class VisionAnalyst:
                 }
             )
         return [{"role": "user", "content": content}]
+
+    @staticmethod
+    def _build_text_only_messages(prompt: str) -> List[dict]:
+        """Single user message without images (for models that are not vision-capable)."""
+        return [{"role": "user", "content": prompt}]
 
     def generate_visual_summary(self, charts_base64: Dict[str, str]) -> str:
         """First pass: vision model extracts visual chart signals."""
@@ -115,9 +128,11 @@ class VisionAnalyst:
             raise ValueError("charts_base64 cannot be empty.")
 
         visual_summary = self.generate_visual_summary(charts_base64)
+        symbols = ", ".join(charts_base64)
         prompt = (
-            "You are a technical analyst. Use the provided charts and visual summary "
-            "to produce a market technician report.\n\n"
+            "You are a technical analyst. The text below is a vision-only summary of "
+            f"market charts (symbols covered: {symbols}). Expand it into a market "
+            "technician report. Do not claim you are looking at raw images; rely on the summary.\n\n"
             "Return sections for each symbol with:\n"
             "1) Trend (short and medium term)\n"
             "2) Support levels\n"
@@ -127,7 +142,7 @@ class VisionAnalyst:
             "Then provide an overall cross-asset view for equities, oil, and gold.\n\n"
             f"Visual summary from chart model:\n{visual_summary}"
         )
-        messages = self._build_vision_messages(prompt, charts_base64)
+        messages = self._build_text_only_messages(prompt)
         technical_analysis = self._request_chat_completion(
             model=self.text_model,
             messages=messages,
