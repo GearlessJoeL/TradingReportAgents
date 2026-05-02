@@ -3,13 +3,14 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 from agents.vision_analyst import VisionAnalyst
-from skills.chart_generator import generate_market_charts
+from skills.chart_generator import DEFAULT_MARKET_SYMBOLS, generate_market_charts
 from skills.notifier import notify_report
 from tradingagents.agents.researchers.prompts import (
     DebatePromptContext,
@@ -42,6 +43,45 @@ def _write_chart_files(charts_base64: dict[str, str], output_dir: Path) -> list[
         file_path.write_bytes(base64.b64decode(image_b64))
         chart_paths.append(file_path)
     return chart_paths
+
+
+def _symbol_to_cid(symbol: str) -> str:
+    """Convert a ticker symbol to a safe Content-ID name (e.g. '^GSPC' → 'chart_gspc')."""
+    return "chart_" + re.sub(r"[^a-zA-Z0-9]", "", symbol).lower()
+
+
+def _build_image_map(charts_base64: dict[str, str]) -> dict[str, bytes]:
+    """Build a CID → raw image bytes mapping from base64-encoded chart data."""
+    return {
+        _symbol_to_cid(sym): base64.b64decode(b64)
+        for sym, b64 in charts_base64.items()
+    }
+
+
+def _inject_chart_images(
+    report: str,
+    charts_base64: dict[str, str],
+    significant_movers: list[tuple[str, str, float]],
+) -> str:
+    """Insert markdown image references (using CID URIs) into the Chart section."""
+    symbol_names: dict[str, str] = {v: k for k, v in DEFAULT_MARKET_SYMBOLS.items()}
+    for name, sym, _ in significant_movers:
+        symbol_names.setdefault(sym, name)
+
+    image_lines = [
+        f"![{symbol_names.get(sym, sym)} ({sym})](cid:{_symbol_to_cid(sym)})"
+        for sym in charts_base64
+    ]
+    if not image_lines:
+        return report
+
+    images_block = "\n\n".join(image_lines)
+
+    match = re.search(r"(## 4\.[^\n]*\n)", report)
+    if match:
+        pos = match.end()
+        return report[:pos] + "\n" + images_block + "\n\n" + report[pos:]
+    return report + "\n\n" + images_block
 
 
 def _format_movers_section(significant_movers: list[tuple[str, str, float]]) -> str:
@@ -129,33 +169,24 @@ def main() -> None:
     # Step D: synthesize into final markdown report.
     synthesis_system = """\
 You are an elite, autonomous Financial System Analyst and Portfolio Manager. \
-Your objective is to synthesize daily financial news, market data, and technical analysis \
-into a high-quality, actionable, and noise-free Daily Market Report for an institutional investor.
+Your objective is to synthesize daily financial news, market data, and visual technical analysis \
+into a high-quality, actionable, and structured Daily Market Report for institutional investors.
 
 You must be objective, concise, and focus exclusively on high-impact events. \
-Do not provide financial advice or execute trades. Your goal is strictly information synthesis and risk assessment.
+Do not hallucinate data, prices, or source links. Do not provide financial advice. \
+Your goal is strictly information synthesis and risk assessment.
 
-## Core Responsibilities
+You will receive raw inputs: news & macro context, watchlist price action, \
+and vision analyst output (technical chart summaries). Synthesize them into the exact 7-section \
+Markdown format specified in the user prompt. Do not deviate from that structure.
 
-### Step 1: The Macro Market Summary (The "Top Down" View)
-Review the news context and overall index performance. Provide a single, concise paragraph \
-summarizing the overarching theme of yesterday's market (e.g. "Risk-on sentiment driven by \
-dovish Fed commentary," or "Tech sector drag due to semiconductor supply chain fears").
-
-### Step 2: Significant News Filtering & Micro Analysis
-Review the provided news items. Ruthlessly filter out noise — ignore standard PR announcements, \
-minor analyst upgrades, and low-impact geopolitical noise. Select only the most significant news \
-items (maximum 3-5) that have a direct, material impact on the broader market or specific sectors. \
-For each selected item, provide a 2-3 sentence analysis detailing why it matters and its potential \
-ripple effects. When a source link is available for a news item, include it as a markdown hyperlink \
-on the headline (e.g. **[Headline](url)**). If no link is available, just bold the headline.
-
-### Step 3: Watchlist Volatility Trigger & Deep Dive
-Review the watchlist price action data. Identify any equity with a daily price change (positive or \
-negative) of >= 5%. For every triggered equity: state the ticker and the exact percentage change; \
-cross-reference the news context to explain the catalyst for the move; integrate any provided \
-technical analysis to state whether the move broke key support/resistance levels. Use the bull and \
-bear perspectives to add depth to your catalyst analysis.
+Key rules:
+- News Takeaways must be a Markdown table with columns: Theme, Key Stories, Bullish/Bearish Impact.
+- Deep Dive must include original source links from the raw data where available.
+- Chart & Technical Read must use the bulleted sub-format for each ticker/index analyzed.
+- Bull vs Bear Debate table is ONLY for equities with >= 5% daily moves. If none, state so.
+- Final Stance must be a single bolded phrase with brief rationale.
+- Risks section must be 2-3 forward-looking bullet points.
 """
 
     synthesis_user = f"""\
@@ -182,27 +213,53 @@ Bear argument:
 {bear_argument}
 
 ## Output Format (Strict Adherence Required)
-Format your final output strictly in Markdown using this structure:
+Synthesize ALL inputs above and format your response STRICTLY in Markdown using these exact 7 sections. Do not deviate.
 
-# 📈 Daily Market Report - {trade_date}
+# 📈 Daily Market Report — {trade_date}
 
-## 🌐 Macro Market Overview
-[A concise, 3-4 sentence summary of yesterday's overall market action and primary drivers.]
+## 1. 🌐 General Market Summary
+[Single concise paragraph: overarching theme, dominant sentiment (risk-on/off), major index performance, primary macro drivers.]
 
-## 📰 High-Impact Catalysts
-* **[Event/Headline 1](source_url_if_available)**: [Your brief, sharp analysis of its impact.]
-* **[Event/Headline 2](source_url_if_available)**: [Your brief, sharp analysis of its impact.]
-*(Use markdown hyperlinks on headlines when a source Link is provided in the news context. Omit the link markup if none is available.)*
+## 2. 📰 News Takeaways
 
-## 🚨 Watchlist Volatility Alerts (>5% Move)
-*(If no stocks triggered the 5% threshold, output: "No watchlist equities experienced a >5% move yesterday.")*
+| Theme | Key Stories | Bullish/Bearish Impact |
+| :--- | :--- | :--- |
+| [Theme] | [Brief summary] | [Bullish / Bearish / Neutral] |
 
-* **[$TICKER]**: [+X% / -Y%]
-    * *Catalyst:* [Explanation of the move]
-    * *Technical Context:* [Integration of chart data, if applicable]
+## 3. 🔍 Deep Dive: Major Catalysts
+[1-3 most significant news items with deeper fundamental analysis. MUST append original [Source Link] from Input 1 for each story where available.]
+* **[Headline/Topic]**: [Fundamental analysis] - [Source Link]
+
+## 4. 📈 Chart & Technical Read
+[Technical breakdown for major indices and key watchlist tickers using Input 3. For EACH chart/ticker use this bulleted format:]
+* **[$TICKER / Index Name]**
+    * **Explanation:** [Brief narrative of chart pattern/trend]
+    * **Current Level:** [Value]
+    * **Key Support:** [Value/Zone]
+    * **Key Resistance:** [Value/Zone]
+    * **50-day MA:** [Value or relationship]
+    * **RSI:** [Value or status]
+    * **Volume:** [Status]
+    * **Bias:** [Bullish / Bearish / Neutral]
+
+## 5. ⚔️ Bull vs Bear Debate (Significant Movers)
+[ONLY equities with >= 5% daily move from Input 2. If none, write "No significant outliers in the watchlist today."]
+
+| Ticker | Price Change | The Bull Case | The Bear Case |
+| :--- | :--- | :--- | :--- |
+| [$TICKER] | [+X% / -Y%] | [Arguments] | [Arguments] |
+
+## 6. 🎯 Final Stance
+* **Stance: [Hold / Overweight (with caution) / Underweight / Aggressive Buy]**
+* **Rationale:** [1-2 sentences justifying stance based on today's data.]
+
+## 7. 🔮 Risks & What to Watch Next Week
+* [Risk/Watch item 1]
+* [Risk/Watch item 2]
+* [Risk/Watch item 3]
 
 ---
-*Disclaimer: This report is auto-generated for research purposes only and does not constitute financial advice.*
+*Disclaimer: This report is auto-generated by the TradingAgents Pipeline for research purposes only and does not constitute financial advice.*
 """
     final_report = _message_text(
         quick_llm.invoke(
@@ -212,13 +269,14 @@ Format your final output strictly in Markdown using this structure:
             ]
         )
     )
+    final_report = _inject_chart_images(final_report, charts_base64, significant_movers)
     print(final_report)
 
-    image_buffers = [path.read_bytes() for path in chart_paths]
+    image_map = _build_image_map(charts_base64)
     notify_report(
         subject=f"Daily Market Report - {trade_date}",
         markdown_text=final_report,
-        image_buffers=image_buffers,
+        image_map=image_map,
     )
 
 

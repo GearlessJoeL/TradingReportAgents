@@ -121,6 +121,7 @@ def _convert_inline_markdown(line: str) -> str:
 
 def _apply_inline_formatting(text: str) -> str:
     """Apply bold, italic, and inline code formatting (text must already be HTML-escaped)."""
+    text = re.sub(r"!\[.*?\]\(.*?\)", "", text)
     text = re.sub(r"\*\*\*(.+?)\*\*\*", r"<b><i>\1</i></b>", text)
     text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
     text = re.sub(r"(?<!\*)\*([^\*]+?)\*(?!\*)", r"<i>\1</i>", text)
@@ -168,7 +169,7 @@ def _to_bytes(image: bytes | bytearray | memoryview | BinaryIO) -> bytes | None:
     return None
 
 
-def send_telegram_report(markdown_text: str, image_buffers: list | None = None) -> bool:
+def send_telegram_report(markdown_text: str, image_map: dict[str, bytes] | None = None) -> bool:
     """Send the final markdown report (and optional images) to Telegram.
 
     Returns True on success and False on any validation/network/API error.
@@ -183,7 +184,7 @@ def send_telegram_report(markdown_text: str, image_buffers: list | None = None) 
         logger.info("Telegram notifier skipped: TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID not configured.")
         return False
 
-    image_buffers = image_buffers or []
+    image_map = image_map or {}
     base_url = f"https://api.telegram.org/bot{bot_token}"
 
     telegram_html = _markdown_to_telegram_html(markdown_text)
@@ -202,16 +203,11 @@ def send_telegram_report(markdown_text: str, image_buffers: list | None = None) 
                 )
                 message_response.raise_for_status()
 
-            for index, image in enumerate(image_buffers, start=1):
-                image_bytes = _to_bytes(image)
-                if not image_bytes:
-                    logger.warning("Skipping invalid image buffer at index %s", index - 1)
-                    continue
-
+            for cid, image_bytes in image_map.items():
                 photo_response = client.post(
                     f"{base_url}/sendPhoto",
                     data={"chat_id": chat_id},
-                    files={"photo": (f"chart_{index}.png", io.BytesIO(image_bytes), "image/png")},
+                    files={"photo": (f"{cid}.png", io.BytesIO(image_bytes), "image/png")},
                 )
                 photo_response.raise_for_status()
     except (httpx.RequestError, httpx.HTTPStatusError) as exc:
@@ -241,9 +237,13 @@ def _load_recipient_emails(emails_file: str) -> list[str]:
 def send_email_report(
     subject: str,
     markdown_text: str,
-    image_buffers: list | None = None,
+    image_map: dict[str, bytes] | None = None,
 ) -> bool:
     """Send the report by SMTP to addresses listed in EMAILS_FILE.
+
+    Images referenced via ``![...](cid:<cid>)`` in *markdown_text* are embedded
+    inline using MIME ``Content-ID`` headers so they render inside the HTML body
+    rather than appearing as separate attachments.
 
     Uses NOTIFY_EMAIL, EMAILS_FILE, SMTP_* and SMTP_USE_TLS from the environment.
     Returns True when skipped (not an error), or after a successful send.
@@ -276,8 +276,10 @@ def send_email_report(
     password = os.environ.get("SMTP_PASSWORD", "").strip()
     use_tls = _env_truthy("SMTP_USE_TLS", "true")
 
-    image_buffers = image_buffers or []
-    msg = MIMEMultipart("mixed")
+    image_map = image_map or {}
+
+    # related → alternative (plain + html) + inline CID images
+    msg = MIMEMultipart("related")
     msg["Subject"] = str(Header(subject, "utf-8"))
     msg["From"] = from_email
     msg["To"] = ", ".join(recipients)
@@ -287,13 +289,10 @@ def send_email_report(
     alt.attach(MIMEText(_markdown_to_email_html(markdown_text), "html", "utf-8"))
     msg.attach(alt)
 
-    for index, image in enumerate(image_buffers, start=1):
-        image_bytes = _to_bytes(image)
-        if not image_bytes:
-            logger.warning("Skipping invalid image buffer at index %s", index - 1)
-            continue
+    for cid, image_bytes in image_map.items():
         part = MIMEImage(image_bytes, _subtype="png")
-        part.add_header("Content-Disposition", "attachment", filename=f"chart_{index}.png")
+        part.add_header("Content-ID", f"<{cid}>")
+        part.add_header("Content-Disposition", "inline", filename=f"{cid}.png")
         msg.attach(part)
 
     try:
@@ -324,8 +323,8 @@ def send_email_report(
 def notify_report(
     subject: str,
     markdown_text: str,
-    image_buffers: list | None = None,
+    image_map: dict[str, bytes] | None = None,
 ) -> None:
     """Send via Telegram and/or email according to NOTIFY_* env flags."""
-    send_telegram_report(markdown_text=markdown_text, image_buffers=image_buffers)
-    send_email_report(subject=subject, markdown_text=markdown_text, image_buffers=image_buffers)
+    send_telegram_report(markdown_text=markdown_text, image_map=image_map)
+    send_email_report(subject=subject, markdown_text=markdown_text, image_map=image_map)
