@@ -147,7 +147,8 @@ Review the provided news items. Ruthlessly filter out noise — ignore standard 
 minor analyst upgrades, and low-impact geopolitical noise. Select only the most significant news \
 items (maximum 3-5) that have a direct, material impact on the broader market or specific sectors. \
 For each selected item, provide a 2-3 sentence analysis detailing why it matters and its potential \
-ripple effects.
+ripple effects. When a source link is available for a news item, include it as a markdown hyperlink \
+on the headline (e.g. **[Headline](url)**). If no link is available, just bold the headline.
 
 ### Step 3: Watchlist Volatility Trigger & Deep Dive
 Review the watchlist price action data. Identify any equity with a daily price change (positive or \
@@ -189,8 +190,9 @@ Format your final output strictly in Markdown using this structure:
 [A concise, 3-4 sentence summary of yesterday's overall market action and primary drivers.]
 
 ## 📰 High-Impact Catalysts
-* **[Event/Headline 1]**: [Your brief, sharp analysis of its impact.]
-* **[Event/Headline 2]**: [Your brief, sharp analysis of its impact.]
+* **[Event/Headline 1](source_url_if_available)**: [Your brief, sharp analysis of its impact.]
+* **[Event/Headline 2](source_url_if_available)**: [Your brief, sharp analysis of its impact.]
+*(Use markdown hyperlinks on headlines when a source Link is provided in the news context. Omit the link markup if none is available.)*
 
 ## 🚨 Watchlist Volatility Alerts (>5% Move)
 *(If no stocks triggered the 5% threshold, output: "No watchlist equities experienced a >5% move yesterday.")*
