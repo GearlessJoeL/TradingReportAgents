@@ -58,30 +58,72 @@ def _build_image_map(charts_base64: dict[str, str]) -> dict[str, bytes]:
     }
 
 
+def _block_matches_chart(block: str, symbol: str, display_name: str) -> bool:
+    """Check whether an analysis text block corresponds to a given chart symbol."""
+    lower = block.lower()
+    if display_name.lower() in lower:
+        return True
+    if symbol in block:
+        return True
+    clean = re.sub(r"[^a-zA-Z0-9]", "", symbol).lower()
+    return clean in lower
+
+
 def _inject_chart_images(
     report: str,
     charts_base64: dict[str, str],
     significant_movers: list[tuple[str, str, float]],
 ) -> str:
-    """Insert markdown image references (using CID URIs) into the Chart section."""
+    """Place each chart image directly above its matching analysis block in section 4."""
     symbol_names: dict[str, str] = {v: k for k, v in DEFAULT_MARKET_SYMBOLS.items()}
     for name, sym, _ in significant_movers:
         symbol_names.setdefault(sym, name)
 
-    image_lines = [
-        f"![{symbol_names.get(sym, sym)} ({sym})](cid:{_symbol_to_cid(sym)})"
-        for sym in charts_base64
-    ]
-    if not image_lines:
+    if not charts_base64:
         return report
 
-    images_block = "\n\n".join(image_lines)
+    sec4_header = re.search(r"(## 4\.[^\n]*\n)", report)
+    if not sec4_header:
+        lines = [
+            f"![{symbol_names.get(s, s)}({s})](cid:{_symbol_to_cid(s)})"
+            for s in charts_base64
+        ]
+        return report + "\n\n" + "\n\n".join(lines)
 
-    match = re.search(r"(## 4\.[^\n]*\n)", report)
-    if match:
-        pos = match.end()
-        return report[:pos] + "\n" + images_block + "\n\n" + report[pos:]
-    return report + "\n\n" + images_block
+    sec4_start = sec4_header.end()
+    sec5 = re.search(r"\n## 5\.", report[sec4_start:])
+    sec4_end = (sec4_start + sec5.start()) if sec5 else len(report)
+    sec4_body = report[sec4_start:sec4_end]
+
+    # Split into top-level bullet blocks (each starts with "* **")
+    blocks = re.split(r"(?=^\* \*\*)", sec4_body, flags=re.MULTILINE)
+
+    used: set[str] = set()
+    new_parts: list[str] = []
+
+    for block in blocks:
+        matched_sym: str | None = None
+        for sym in charts_base64:
+            if sym in used:
+                continue
+            if _block_matches_chart(block, sym, symbol_names.get(sym, sym)):
+                matched_sym = sym
+                break
+
+        if matched_sym:
+            used.add(matched_sym)
+            name = symbol_names.get(matched_sym, matched_sym)
+            img = f"![{name}({matched_sym})](cid:{_symbol_to_cid(matched_sym)})\n\n"
+            new_parts.append(img + block)
+        else:
+            new_parts.append(block)
+
+    for sym in charts_base64:
+        if sym not in used:
+            name = symbol_names.get(sym, sym)
+            new_parts.append(f"\n![{name}({sym})](cid:{_symbol_to_cid(sym)})\n\n")
+
+    return report[:sec4_start] + "".join(new_parts) + report[sec4_end:]
 
 
 def _format_movers_section(significant_movers: list[tuple[str, str, float]]) -> str:
