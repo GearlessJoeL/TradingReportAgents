@@ -27,7 +27,7 @@ from .runtime_interfaces import DebateContext, DebateTranscript, run_bull_bear_d
 try:
     from skills.notifier import notify_report
 except ModuleNotFoundError:
-    def notify_report(subject: str, markdown_text: str, image_buffers: list | None = None) -> None:  # noqa: ARG001
+    def notify_report(subject: str, markdown_text: str, image_map: dict | None = None) -> None:  # noqa: ARG001
         return None
 
 
