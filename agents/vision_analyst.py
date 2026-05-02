@@ -44,7 +44,7 @@ class VisionAnalyst:
             chart_model
             or os.getenv("OPENROUTER_CHART_MODEL")
             or merged.get("chart_llm")
-            or "openai/gpt-image-1-mini"
+            or "openai/gpt-4o-mini"
         )
         self.timeout_seconds = timeout_seconds
 
