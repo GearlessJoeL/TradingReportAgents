@@ -85,8 +85,10 @@ def _get_daily_changes(symbol: str) -> pd.Series | None:
 
 
 def _has_significant_change(daily_pct: pd.Series, threshold: float) -> bool:
-    """True if any day in the series had an absolute move >= threshold."""
-    return bool((daily_pct.abs() >= threshold).any())
+    """True if the most recent trading day had an absolute move >= threshold."""
+    if daily_pct.empty:
+        return False
+    return bool(abs(daily_pct.iloc[-1]) >= threshold)
 
 
 def _build_daily_chart_base64(title: str, symbol: str, daily_pct: pd.Series) -> str | None:
@@ -140,20 +142,23 @@ def generate_market_charts(
     watchlist_path: str | Path = "watchlist.txt",
     period: str = "6mo",
     significance_threshold: float | None = None,
-) -> Dict[str, str]:
+) -> tuple[Dict[str, str], List[Tuple[str, str, float]]]:
     """Generate daily gain/drop bar charts (last 5 trading days) as base64 PNGs.
 
     Charts are always generated for the 4 default indexes (S&P 500, Nasdaq 100,
-    Crude Oil, Gold). Watchlist stocks are only charted if they had at least one
-    day with a change >= the significance threshold (default 5%).
+    Crude Oil, Gold). Watchlist stocks are only charted if the previous trading
+    day's change >= the significance threshold (default 5%).
 
     Returns:
-        Dict[str, str]: Keyed by symbol, values are raw base64 PNG strings.
+        Tuple of:
+            - Dict[str, str]: Keyed by symbol, values are raw base64 PNG strings.
+            - List of (name, symbol, last_day_pct) for stocks that triggered the filter.
     """
     threshold = significance_threshold if significance_threshold is not None else SIGNIFICANT_CHANGE_PCT
     watchlist_entries = _parse_watchlist(watchlist_path)
     default_symbols = set(s.upper() for s in DEFAULT_MARKET_SYMBOLS.values())
     charts: Dict[str, str] = {}
+    significant_movers: List[Tuple[str, str, float]] = []
 
     for name, symbol in _combined_symbols(watchlist_entries):
         is_default = symbol.upper() in default_symbols
@@ -163,14 +168,17 @@ def generate_market_charts(
             logger.info("Skipping %s (%s): no daily data available", symbol, name)
             continue
 
-        if not is_default and not _has_significant_change(daily_pct, threshold):
-            logger.info(
-                "Skipping %s (%s): no day exceeded %.1f%% threshold",
-                symbol,
-                name,
-                threshold,
-            )
-            continue
+        if not is_default:
+            if not _has_significant_change(daily_pct, threshold):
+                logger.info(
+                    "Skipping %s (%s): previous day change %.1f%% below %.1f%% threshold",
+                    symbol,
+                    name,
+                    abs(daily_pct.iloc[-1]),
+                    threshold,
+                )
+                continue
+            significant_movers.append((name, symbol, float(daily_pct.iloc[-1])))
 
         chart_b64 = _build_daily_chart_base64(name, symbol, daily_pct)
         if chart_b64 is None:
@@ -183,4 +191,4 @@ def generate_market_charts(
             "for any symbol (defaults + watchlist). Check symbols and network access."
         )
 
-    return charts
+    return charts, significant_movers
