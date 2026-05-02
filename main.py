@@ -18,7 +18,7 @@ from tradingagents.agents.researchers.prompts import (
 )
 from tradingagents.dataflows.config import set_config
 from tradingagents.dataflows.interface import route_to_vendor
-from tradingagents.default_config import DEFAULT_CONFIG
+from tradingagents.default_config import DEFAULT_CONFIG, apply_llm_env_overrides
 from tradingagents.llm_clients import create_llm_client
 
 
@@ -68,6 +68,7 @@ def main() -> None:
     charts_output_dir = Path(os.environ.get("CHART_OUTPUT_DIR", "output/charts"))
 
     config = DEFAULT_CONFIG.copy()
+    apply_llm_env_overrides(config)
     config["max_debate_rounds"] = 1
     config["data_vendors"] = {
         "core_stock_apis": "yfinance",
@@ -100,7 +101,11 @@ def main() -> None:
     # Step B: generate charts and run vision analysis.
     charts_base64 = generate_market_charts(watchlist_path=watchlist_path, period=chart_period)
     chart_paths = _write_chart_files(charts_base64, charts_output_dir)
-    chart_analysis = VisionAnalyst().analyze_charts(charts_base64)
+    chart_analysis = VisionAnalyst(
+        base_url=config.get("backend_url"),
+        text_model=config["deep_think_llm"],
+        chart_model=config["chart_llm"],
+    ).analyze_charts(charts_base64)
 
     # Step C: run one bull/bear debate pass using news context.
     debate_context = DebatePromptContext(

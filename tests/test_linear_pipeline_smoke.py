@@ -31,6 +31,15 @@ class _DummyDeepLLM:
 
 @pytest.mark.smoke
 def test_linear_runtime_smoke_run(monkeypatch):
+    for key in (
+        "LLM_PROVIDER",
+        "LLM_DEEP_THINK_MODEL",
+        "LLM_QUICK_THINK_MODEL",
+        "LLM_CHART_MODEL",
+        "LLM_BACKEND_URL",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
     deep_llm = _DummyDeepLLM()
     quick_llm = object()
 

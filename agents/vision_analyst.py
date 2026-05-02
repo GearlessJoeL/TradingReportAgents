@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import logging
 import os
 from typing import Dict, List, Optional
 
 import httpx
+
+from tradingagents.default_config import DEFAULT_CONFIG, apply_llm_env_overrides
+
+logger = logging.getLogger(__name__)
 
 
 class VisionAnalyst:
@@ -12,18 +17,35 @@ class VisionAnalyst:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        base_url: str = "https://openrouter.ai/api/v1",
-        text_model: str = "deepseek/deepseek-v4-flash",
-        chart_model: str = "banana2",
+        base_url: Optional[str] = None,
+        text_model: Optional[str] = None,
+        chart_model: Optional[str] = None,
         timeout_seconds: int = 120,
     ) -> None:
         self.api_key = api_key or os.getenv("OPENROUTER_API_KEY")
         if not self.api_key:
             raise ValueError("OPENROUTER_API_KEY is required for VisionAnalyst.")
 
-        self.base_url = base_url.rstrip("/")
-        self.text_model = text_model
-        self.chart_model = chart_model
+        merged = DEFAULT_CONFIG.copy()
+        apply_llm_env_overrides(merged)
+        resolved_base = (
+            base_url
+            or os.getenv("OPENROUTER_BASE_URL")
+            or merged.get("backend_url")
+            or "https://openrouter.ai/api/v1"
+        )
+        self.base_url = resolved_base.rstrip("/")
+        self.text_model = (
+            text_model
+            or os.getenv("OPENROUTER_VISION_TEXT_MODEL")
+            or merged["deep_think_llm"]
+        )
+        self.chart_model = (
+            chart_model
+            or os.getenv("OPENROUTER_CHART_MODEL")
+            or merged.get("chart_llm")
+            or "google/gemini-2.0-flash-001"
+        )
         self.timeout_seconds = timeout_seconds
 
     def _request_chat_completion(
@@ -48,6 +70,14 @@ class VisionAnalyst:
                     "max_tokens": max_tokens,
                 },
             )
+        if response.is_error:
+            body_preview = (response.text or "")[:2000]
+            logger.error(
+                "OpenRouter chat/completions failed model=%s status=%s body=%s",
+                model,
+                response.status_code,
+                body_preview,
+            )
         response.raise_for_status()
         payload = response.json()
         return payload["choices"][0]["message"]["content"]
@@ -65,7 +95,7 @@ class VisionAnalyst:
         return [{"role": "user", "content": content}]
 
     def generate_visual_summary(self, charts_base64: Dict[str, str]) -> str:
-        """Use banana2 to extract visual chart signals."""
+        """First pass: vision model extracts visual chart signals."""
         prompt = (
             "Review each chart and describe key visual patterns only. "
             "For each symbol, identify trend direction, momentum behavior, "
@@ -80,7 +110,7 @@ class VisionAnalyst:
         )
 
     def analyze_charts(self, charts_base64: Dict[str, str]) -> Dict[str, str]:
-        """Run a two-stage analysis: banana2 visual pass + deepseek technical analysis."""
+        """Two-stage analysis: vision chart read, then text model technical write-up."""
         if not charts_base64:
             raise ValueError("charts_base64 cannot be empty.")
 

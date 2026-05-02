@@ -1,6 +1,35 @@
 import os
+from typing import Any, Dict
 
 _TRADINGAGENTS_HOME = os.path.join(os.path.expanduser("~"), ".tradingagents")
+
+# Map .env keys (LLM_*) onto DEFAULT_CONFIG keys. Values in .env.example match defaults.
+_LLM_ENV_TO_CONFIG: tuple[tuple[str, str], ...] = (
+    ("LLM_PROVIDER", "llm_provider"),
+    ("LLM_DEEP_THINK_MODEL", "deep_think_llm"),
+    ("LLM_QUICK_THINK_MODEL", "quick_think_llm"),
+    ("LLM_CHART_MODEL", "chart_llm"),
+    ("LLM_BACKEND_URL", "backend_url"),
+)
+
+
+def apply_llm_env_overrides(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Overlay LLM_* environment variables onto a config dict (mutates in place).
+
+    Empty or whitespace-only model/provider values are ignored (keeps prior config).
+    ``LLM_BACKEND_URL`` may be set to empty to force ``backend_url`` to ``None``.
+    """
+    for env_key, cfg_key in _LLM_ENV_TO_CONFIG:
+        raw = os.getenv(env_key)
+        if raw is None:
+            continue
+        stripped = raw.strip()
+        if cfg_key == "backend_url":
+            config[cfg_key] = stripped if stripped else None
+        elif stripped:
+            config[cfg_key] = stripped
+    return config
+
 
 DEFAULT_CONFIG = {
     "project_dir": os.path.abspath(os.path.join(os.path.dirname(__file__), ".")),

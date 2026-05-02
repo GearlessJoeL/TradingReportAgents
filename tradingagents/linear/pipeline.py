@@ -19,7 +19,7 @@ from tradingagents.agents.researchers.prompts import (
 )
 from tradingagents.dataflows.config import set_config
 from tradingagents.dataflows.interface import route_to_vendor
-from tradingagents.default_config import DEFAULT_CONFIG
+from tradingagents.default_config import DEFAULT_CONFIG, apply_llm_env_overrides
 from tradingagents.llm_clients import create_llm_client
 
 from .runtime_interfaces import DebateContext, DebateTranscript, run_bull_bear_debate
@@ -43,7 +43,8 @@ class LinearDebateRuntime:
     """Fetch news, run bull/bear rounds, then summarize in one pass."""
 
     def __init__(self, config: dict[str, Any] | None = None):
-        self.config = config or DEFAULT_CONFIG.copy()
+        self.config = DEFAULT_CONFIG.copy() if not config else dict(config)
+        apply_llm_env_overrides(self.config)
         set_config(self.config)
 
         provider = self.config["llm_provider"]
