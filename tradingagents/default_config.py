@@ -38,7 +38,10 @@ DEFAULT_CONFIG = {
     # LLM settings — all models routed through OpenRouter by default.
     # Override llm_provider / model names to use a different gateway.
     "llm_provider": "openrouter",
-    "deep_think_llm": "deepseek/deepseek-v4-flash",
+    # Deep: reasoning-grade synthesis and domain analysis (not the flash tier).
+    # Override with e.g. deepseek/deepseek-r1 on OpenRouter for maximal explicit reasoning.
+    "deep_think_llm": "deepseek/deepseek-v4-pro",
+    # Quick: fast tool-heavy loops and lighter downstream formatting where appropriate.
     "quick_think_llm": "deepseek/deepseek-v4-flash",
     # Vision-in via chat/completions; use a model that reliably accepts image_url payloads.
     "chart_llm": "moonshotai/kimi-k2.6",
