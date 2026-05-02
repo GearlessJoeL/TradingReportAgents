@@ -180,6 +180,17 @@ An interface will appear showing results as they load, letting you track the age
   <img src="assets/cli/cli_transaction.png" width="100%" style="display: inline-block; margin: 0 2%;">
 </p>
 
+### Post-Refactor Verification
+
+For a focused validation pass of the stateless linear runtime (smoke run,
+prompt regression, and CLI/docs checks), use:
+
+```bash
+pytest -q tests/test_linear_pipeline_smoke.py tests/test_researcher_prompts.py tests/test_cli_linear_contract.py
+```
+
+See `POST_REFACTOR_VERIFICATION.md` for full pass criteria and manual CLI checks.
+
 ## TradingAgents Package
 
 ### Implementation Details

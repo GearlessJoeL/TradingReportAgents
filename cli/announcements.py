@@ -1,5 +1,5 @@
 import getpass
-import requests
+import httpx
 from rich.console import Console
 from rich.panel import Panel
 
@@ -13,7 +13,7 @@ def fetch_announcements(url: str = None, timeout: float = None) -> dict:
     fallback = CLI_CONFIG["announcements_fallback"]
 
     try:
-        response = requests.get(endpoint, timeout=timeout)
+        response = httpx.get(endpoint, timeout=timeout)
         response.raise_for_status()
         data = response.json()
         return {

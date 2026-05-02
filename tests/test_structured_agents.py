@@ -1,10 +1,7 @@
 """Tests for structured-output agents (Trader and Research Manager).
 
-The Portfolio Manager has its own coverage in tests/test_memory_log.py
-(which exercises the full memory-log → PM injection cycle).  This file
-covers the parallel schemas, render functions, and graceful-fallback
-behavior we added for the Trader and Research Manager so all three
-decision-making agents share the same shape.
+This file covers schemas, render functions, and graceful fallback behavior
+for structured outputs used by decision-making agents.
 """
 
 from unittest.mock import MagicMock
