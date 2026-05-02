@@ -1,0 +1,1 @@
+# Intentionally empty: pipeline uses default index/commodity symbols only.
