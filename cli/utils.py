@@ -136,9 +136,9 @@ def select_research_depth() -> int:
 
 def _fetch_openrouter_models() -> List[Tuple[str, str]]:
     """Fetch available models from the OpenRouter API."""
-    import requests
+    import httpx
     try:
-        resp = requests.get("https://openrouter.ai/api/v1/models", timeout=10)
+        resp = httpx.get("https://openrouter.ai/api/v1/models", timeout=10)
         resp.raise_for_status()
         models = resp.json().get("data", [])
         return [(m.get("name") or m["id"], m["id"]) for m in models]

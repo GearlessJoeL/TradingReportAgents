@@ -1,9 +1,9 @@
 import os
-import requests
 import pandas as pd
 import json
 from datetime import datetime
 from io import StringIO
+import httpx
 
 API_BASE_URL = "https://www.alphavantage.co/query"
 
@@ -63,7 +63,8 @@ def _make_api_request(function_name: str, params: dict) -> dict | str:
         # Remove entitlement if it's None or empty
         api_params.pop("entitlement", None)
     
-    response = requests.get(API_BASE_URL, params=api_params)
+    with httpx.Client(timeout=30.0) as client:
+        response = client.get(API_BASE_URL, params=api_params)
     response.raise_for_status()
 
     response_text = response.text
