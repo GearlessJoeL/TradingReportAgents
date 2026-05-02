@@ -14,16 +14,121 @@ from pathlib import Path
 from typing import BinaryIO
 
 import httpx
+import markdown as md
 
 logger = logging.getLogger(__name__)
 
 _TELEGRAM_MAX_LENGTH = 4096
 
 
-def _escape_markdown_v2(text: str) -> str:
-    """Escape special characters for Telegram MarkdownV2 parse mode."""
-    special_chars = r"_*[]()~`>#+-=|{}.!\\"
-    return re.sub(f"([{re.escape(special_chars)}])", r"\\\1", text)
+def _markdown_to_email_html(text: str) -> str:
+    """Convert markdown to a full HTML email document with inline styles."""
+    body_html = md.markdown(text, extensions=["tables", "fenced_code", "nl2br"])
+    return f"""\
+<html>
+<head>
+<style>
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+         line-height: 1.6; color: #1a1a1a; max-width: 700px; margin: 0 auto; padding: 20px; }}
+  h1 {{ color: #0d47a1; border-bottom: 2px solid #0d47a1; padding-bottom: 6px; }}
+  h2 {{ color: #1565c0; margin-top: 24px; }}
+  h3 {{ color: #1976d2; }}
+  table {{ border-collapse: collapse; width: 100%; margin: 12px 0; }}
+  th, td {{ border: 1px solid #ddd; padding: 8px 12px; text-align: left; }}
+  th {{ background: #e3f2fd; }}
+  code {{ background: #f5f5f5; padding: 2px 5px; border-radius: 3px; font-size: 0.9em; }}
+  pre {{ background: #263238; color: #eeffff; padding: 14px; border-radius: 6px;
+         overflow-x: auto; }}
+  pre code {{ background: none; color: inherit; padding: 0; }}
+  blockquote {{ border-left: 4px solid #90caf9; margin: 12px 0; padding: 8px 16px;
+               background: #e3f2fd; }}
+  strong {{ color: #0d47a1; }}
+</style>
+</head>
+<body>
+{body_html}
+</body>
+</html>"""
+
+
+def _markdown_to_telegram_html(text: str) -> str:
+    """Convert markdown to the HTML subset Telegram supports.
+
+    Telegram supports: <b>, <i>, <u>, <s>, <code>, <pre>, <a href="">.
+    Headers are not supported natively, so we render them as bold lines.
+    """
+    lines = text.split("\n")
+    result: list[str] = []
+    in_code_block = False
+
+    for line in lines:
+        if line.startswith("```"):
+            if in_code_block:
+                result.append("</pre>")
+                in_code_block = False
+            else:
+                lang = line[3:].strip()
+                if lang:
+                    result.append(f'<pre language="{_escape_html(lang)}">')
+                else:
+                    result.append("<pre>")
+                in_code_block = True
+            continue
+
+        if in_code_block:
+            result.append(_escape_html(line))
+            continue
+
+        converted = _convert_inline_markdown(line)
+        result.append(converted)
+
+    if in_code_block:
+        result.append("</pre>")
+
+    return "\n".join(result)
+
+
+def _escape_html(text: str) -> str:
+    """Escape HTML special characters."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _convert_inline_markdown(line: str) -> str:
+    """Convert a single markdown line to Telegram HTML."""
+    header_match = re.match(r"^(#{1,6})\s+(.*)", line)
+    if header_match:
+        content = _escape_html(header_match.group(2))
+        content = _apply_inline_formatting(content)
+        return f"\n<b>{content}</b>"
+
+    if re.match(r"^[-*]\s+", line):
+        content = re.sub(r"^[-*]\s+", "", line)
+        content = _escape_html(content)
+        content = _apply_inline_formatting(content)
+        return f"• {content}"
+
+    if re.match(r"^\d+\.\s+", line):
+        content = _escape_html(line)
+        content = _apply_inline_formatting(content)
+        return content
+
+    if line.startswith("---") or line.startswith("***"):
+        return "————————————————"
+
+    escaped = _escape_html(line)
+    return _apply_inline_formatting(escaped)
+
+
+def _apply_inline_formatting(text: str) -> str:
+    """Apply bold, italic, and inline code formatting (text must already be HTML-escaped)."""
+    text = re.sub(r"\*\*\*(.+?)\*\*\*", r"<b><i>\1</i></b>", text)
+    text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
+    text = re.sub(r"(?<!\*)\*([^\*]+?)\*(?!\*)", r"<i>\1</i>", text)
+    text = re.sub(r"__(.+?)__", r"<u>\1</u>", text)
+    text = re.sub(r"~~(.+?)~~", r"<s>\1</s>", text)
+    text = re.sub(r"`([^`]+?)`", r"<code>\1</code>", text)
+    text = re.sub(r"\[(.+?)\]\((.+?)\)", r'<a href="\2">\1</a>', text)
+    return text
 
 
 def _split_text(text: str, max_len: int = _TELEGRAM_MAX_LENGTH) -> list[str]:
@@ -81,14 +186,17 @@ def send_telegram_report(markdown_text: str, image_buffers: list | None = None) 
     image_buffers = image_buffers or []
     base_url = f"https://api.telegram.org/bot{bot_token}"
 
+    telegram_html = _markdown_to_telegram_html(markdown_text)
+
     try:
         with httpx.Client(timeout=30.0) as client:
-            for chunk in _split_text(markdown_text):
+            for chunk in _split_text(telegram_html):
                 message_response = client.post(
                     f"{base_url}/sendMessage",
                     json={
                         "chat_id": chat_id,
                         "text": chunk,
+                        "parse_mode": "HTML",
                         "disable_web_page_preview": True,
                     },
                 )
@@ -176,6 +284,7 @@ def send_email_report(
 
     alt = MIMEMultipart("alternative")
     alt.attach(MIMEText(markdown_text, "plain", "utf-8"))
+    alt.attach(MIMEText(_markdown_to_email_html(markdown_text), "html", "utf-8"))
     msg.attach(alt)
 
     for index, image in enumerate(image_buffers, start=1):
