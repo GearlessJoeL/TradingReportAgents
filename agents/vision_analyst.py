@@ -122,13 +122,25 @@ class VisionAnalyst:
             max_tokens=1000,
         )
 
-    def analyze_charts(self, charts_base64: Dict[str, str]) -> Dict[str, str]:
+    def analyze_charts(
+        self,
+        charts_base64: Dict[str, str],
+        *,
+        news_context: str = "",
+    ) -> Dict[str, str]:
         """Two-stage analysis: vision chart read, then text model technical write-up."""
         if not charts_base64:
             raise ValueError("charts_base64 cannot be empty.")
 
         visual_summary = self.generate_visual_summary(charts_base64)
         symbols = ", ".join(charts_base64)
+        news_block = ""
+        if news_context.strip():
+            news_block = (
+                "\n\nRetrieved headlines and summaries (use only to contextualize moves; "
+                "do not invent stories beyond this text):\n"
+                f"{news_context.strip()}\n"
+            )
         prompt = (
             "You are a technical analyst. The text below is a vision-only summary of "
             f"market charts (symbols covered: {symbols}). Expand it into a market "
@@ -138,16 +150,20 @@ class VisionAnalyst:
             "2) Support levels\n"
             "3) Resistance levels\n"
             "4) Momentum / weakness signals\n"
-            "5) A concise trade bias (bullish, bearish, neutral)\n\n"
+            "5) A concise trade bias (bullish, bearish, neutral)\n"
+            "6) Where headline text is provided below, add 2-4 bullet 'Pivotal news' items "
+            "per symbol that plausibly relate to price action (quote or paraphrase titles only).\n\n"
             "Then provide an overall cross-asset view for equities, oil, and gold.\n\n"
             f"Visual summary from chart model:\n{visual_summary}"
+            f"{news_block}"
         )
         messages = self._build_text_only_messages(prompt)
+        tech_max_tokens = 2200 if news_block else 1500
         technical_analysis = self._request_chat_completion(
             model=self.text_model,
             messages=messages,
             temperature=0.1,
-            max_tokens=1500,
+            max_tokens=tech_max_tokens,
         )
         return {
             "visual_summary": visual_summary,

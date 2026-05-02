@@ -35,6 +35,58 @@ def _fetch_global_news(trade_date: str, lookback_days: int) -> str:
     return global_news.strip()
 
 
+# yfinance company news is richer on liquid ETFs than on some index/continuous futures roots.
+CHART_NEWS_QUERY_TICKER: dict[str, str] = {
+    "^GSPC": "SPY",
+    "^NDX": "QQQ",
+    "CL=F": "USO",
+    "GC=F": "GLD",
+}
+
+
+def _news_query_ticker_for_chart(yahoo_chart_symbol: str) -> str:
+    """Ticker passed to get_news for a chart symbol (proxy where helpful)."""
+    return CHART_NEWS_QUERY_TICKER.get(yahoo_chart_symbol, yahoo_chart_symbol)
+
+
+def _fetch_chart_symbol_news(
+    chart_symbols: list[str],
+    *,
+    trade_date: str,
+    lookback_days: int,
+    max_chars_per_symbol: int | None = None,
+) -> str:
+    """Retrieve yfinance routed news per charted symbol (or ETF/commodity proxy)."""
+    cap = max_chars_per_symbol
+    if cap is None:
+        cap = int(os.environ.get("CHART_NEWS_MAX_CHARS_PER_SYMBOL", "4000"))
+    start = (datetime.strptime(trade_date, "%Y-%m-%d") - timedelta(days=lookback_days)).strftime(
+        "%Y-%m-%d"
+    )
+    sections: list[str] = []
+    for chart_sym in chart_symbols:
+        query_sym = _news_query_ticker_for_chart(chart_sym)
+        proxy_note = (
+            f" (headlines fetched via `{query_sym}` as proxy for `{chart_sym}`)"
+            if query_sym != chart_sym
+            else ""
+        )
+        header = f"## Chart-linked news for `{chart_sym}`{proxy_note}"
+        try:
+            blob = route_to_vendor("get_news", query_sym, start, trade_date).strip()
+        except Exception as exc:  # noqa: BLE001 — surface vendor errors in-report
+            blob = f"(Could not fetch news for {query_sym}: {exc})"
+        if cap > 0 and len(blob) > cap:
+            blob = blob[:cap] + "\n…(truncated; increase CHART_NEWS_MAX_CHARS_PER_SYMBOL to see more)\n"
+        sections.append(f"{header}\n\n{blob}")
+    note = (
+        "Symbols above are the chart roots from the pipeline. "
+        "Where a proxy ticker is noted, tie narratives to the underlying index or commodity "
+        "the chart represents, not only to the ETF.\n"
+    )
+    return note + "\n\n".join(sections)
+
+
 def _write_chart_files(charts_base64: dict[str, str], output_dir: Path) -> list[Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     chart_paths: list[Path] = []
@@ -58,6 +110,25 @@ def _build_image_map(charts_base64: dict[str, str]) -> dict[str, bytes]:
     }
 
 
+# Extra prose hints when the model names an index/commodity without the raw Yahoo symbol.
+CHART_BLOCK_MATCH_HINTS: dict[str, tuple[str, ...]] = {
+    "^GSPC": ("s&p 500", "s&p500", "spx", "sandp", "gspc"),
+    "^NDX": ("nasdaq 100", "nasdaq100", "nasdaq-100", "ndx", "qqq"),
+    "CL=F": ("crude oil", "wti", "oil futures", "/cl"),
+    "GC=F": ("gold futures", "spot gold", "comex gold", "xau", "gc=f"),
+}
+
+
+def _build_chart_display_names(
+    significant_movers: list[tuple[str, str, float]],
+) -> dict[str, str]:
+    """Map Yahoo chart symbol -> human-readable label (defaults + watchlist mover names)."""
+    symbol_names: dict[str, str] = {v: k for k, v in DEFAULT_MARKET_SYMBOLS.items()}
+    for name, sym, _ in significant_movers:
+        symbol_names.setdefault(sym, name)
+    return symbol_names
+
+
 def _block_matches_chart(block: str, symbol: str, display_name: str) -> bool:
     """Check whether an analysis text block corresponds to a given chart symbol."""
     lower = block.lower()
@@ -66,7 +137,30 @@ def _block_matches_chart(block: str, symbol: str, display_name: str) -> bool:
     if symbol in block:
         return True
     clean = re.sub(r"[^a-zA-Z0-9]", "", symbol).lower()
-    return clean in lower
+    if clean and clean in lower:
+        return True
+    for hint in CHART_BLOCK_MATCH_HINTS.get(symbol, ()):
+        if hint in lower:
+            return True
+    return False
+
+
+def _orphan_chart_stub_markdown(display_name: str, symbol: str) -> str:
+    """Bullet block when section 4 text did not match a chart (avoids image-only rows)."""
+    return (
+        f"* **{display_name} ({symbol})**\n"
+        "    * **Explanation:** See **Input 3** (visual summary and technical chart analysis) "
+        f"for commentary on **{display_name}**; align figures with the chart image below.\n"
+        "    * **Recent catalysts (news):** See **Input 3.5** for retrieved headlines for this "
+        "symbol (or its news proxy); list 2–4 pivotal items with links when present.\n"
+        "    * **Current Level:** (from chart / Input 3)\n"
+        "    * **Key Support:** —\n"
+        "    * **Key Resistance:** —\n"
+        "    * **50-day MA:** —\n"
+        "    * **RSI:** —\n"
+        "    * **Volume:** —\n"
+        "    * **Bias:** —\n"
+    )
 
 
 def _inject_chart_images(
@@ -75,9 +169,7 @@ def _inject_chart_images(
     significant_movers: list[tuple[str, str, float]],
 ) -> str:
     """Place each chart image directly above its matching analysis block in section 4."""
-    symbol_names: dict[str, str] = {v: k for k, v in DEFAULT_MARKET_SYMBOLS.items()}
-    for name, sym, _ in significant_movers:
-        symbol_names.setdefault(sym, name)
+    symbol_names = _build_chart_display_names(significant_movers)
 
     if not charts_base64:
         return report
@@ -121,7 +213,8 @@ def _inject_chart_images(
     for sym in charts_base64:
         if sym not in used:
             name = symbol_names.get(sym, sym)
-            new_parts.append(f"\n![{name}({sym})](cid:{_symbol_to_cid(sym)})\n\n")
+            img = f"![{name}({sym})](cid:{_symbol_to_cid(sym)})\n\n"
+            new_parts.append("\n" + img + _orphan_chart_stub_markdown(name, sym))
 
     return report[:sec4_start] + "".join(new_parts) + report[sec4_end:]
 
@@ -181,11 +274,18 @@ def main() -> None:
     chart_paths = _write_chart_files(charts_base64, charts_output_dir)
     movers_section = _format_movers_section(significant_movers)
 
+    chart_news_lookback = int(os.environ.get("CHART_NEWS_LOOKBACK_DAYS", str(lookback_days)))
+    chart_symbol_news = _fetch_chart_symbol_news(
+        list(charts_base64.keys()),
+        trade_date=trade_date,
+        lookback_days=chart_news_lookback,
+    )
+
     chart_analysis = VisionAnalyst(
         base_url=config.get("backend_url"),
         text_model=config["deep_think_llm"],
         chart_model=config["chart_llm"],
-    ).analyze_charts(charts_base64)
+    ).analyze_charts(charts_base64, news_context=chart_symbol_news)
 
     # Step C: run one bull/bear debate pass on the overall market.
     news_context = f"## Global Market News\n{global_news}\n\n## Significant Stock Movers\n{movers_section}"
@@ -208,6 +308,12 @@ def main() -> None:
     )
     bear_argument = _message_text(deep_llm.invoke(build_bear_prompt(debate_context)))
 
+    chart_display = _build_chart_display_names(significant_movers)
+    chart_symbols_manifest = "\n".join(
+        f"- {chart_display.get(sym, sym)} (Yahoo symbol: `{sym}`)"
+        for sym in charts_base64
+    )
+
     # Step D: synthesize into final markdown report.
     synthesis_system = """\
 You are an elite, autonomous Financial System Analyst and Portfolio Manager. \
@@ -226,6 +332,9 @@ Key rules:
 - News Takeaways must be a Markdown table with columns: Theme, Key Stories, Bullish/Bearish Impact.
 - Deep Dive must include original source links from the raw data where available.
 - Chart & Technical Read must use the bulleted sub-format for each ticker/index analyzed.
+- Section 4 must include one complete top-level bullet block per symbol listed under "Required chart symbols" in the user message (same template for each); do not omit any listed chart.
+- Section 4 **Explanation** must be 2–4 sentences combining chart structure (Input 3), levels, and—where supportable—how recent items from **Input 3.5** or macro **Input 1** may contextualize the tape.
+- Section 4 must include **Recent catalysts (news)** under each chart block: 2–5 bullet points sourced only from **Input 3.5** (and clearly on-point lines from **Input 1** if they name that market). Preserve article links from the raw text. If nothing relevant exists, say so explicitly.
 - Bull vs Bear Debate table is ONLY for equities with >= 5% daily moves. If none, state so.
 - Final Stance must be a single bolded phrase with brief rationale.
 - Risks section must be 2-3 forward-looking bullet points.
@@ -246,6 +355,12 @@ Chart visual summary:
 
 Technical chart analysis:
 {chart_analysis["technical_analysis"]}
+
+## Input 3.5: Retrieved news for charted symbols (per instrument)
+{chart_symbol_news}
+
+## Required chart symbols (section 4 — one `* **` block each, full sub-bullets)
+{chart_symbols_manifest}
 
 ## Input 4: Bull/Bear Market Perspectives
 Bull argument:
@@ -273,9 +388,10 @@ Synthesize ALL inputs above and format your response STRICTLY in Markdown using 
 * **[Headline/Topic]**: [Fundamental analysis] - [Source Link]
 
 ## 4. 📈 Chart & Technical Read
-[Technical breakdown for major indices and key watchlist tickers using Input 3. For EACH chart/ticker use this bulleted format:]
+[Technical breakdown for major indices and key watchlist tickers using Inputs 3, 3.5, and (where relevant) 1. For EACH chart/ticker use this bulleted format:]
 * **[$TICKER / Index Name]**
-    * **Explanation:** [Brief narrative of chart pattern/trend]
+    * **Explanation:** [2–4 sentences: pattern/trend/inflections; optionally connect to plausible drivers from Inputs 3.5 / 1 when grounded in that text]
+    * **Recent catalysts (news):** [2–5 sub-bullets from **Input 3.5** for this symbol or its stated proxy; include `Link:` lines from raw text. On-point macro lines from **Input 1** allowed if they clearly reference this market. If none: say "No salient symbol-specific headlines in window."]
     * **Current Level:** [Value]
     * **Key Support:** [Value/Zone]
     * **Key Resistance:** [Value/Zone]
