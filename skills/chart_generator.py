@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import logging
 from io import BytesIO
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
@@ -10,6 +11,8 @@ import matplotlib.pyplot as plt
 import yfinance as yf
 
 matplotlib.use("Agg")
+
+logger = logging.getLogger(__name__)
 
 
 DEFAULT_MARKET_SYMBOLS: Dict[str, str] = {
@@ -55,8 +58,18 @@ def _rolling_average(close_series, window: int):
     return close_series.rolling(window=window).mean()
 
 
-def _build_chart_base64(title: str, symbol: str, period: str = "6mo") -> str:
-    data = yf.download(
+def _periods_to_try(primary: str) -> List[str]:
+    """Prefer the configured period, then shorter windows Yahoo often still has."""
+    fallbacks = ["3mo", "1mo", "5d", "1y", "max"]
+    ordered: List[str] = []
+    for p in [primary.strip()] + fallbacks:
+        if p and p not in ordered:
+            ordered.append(p)
+    return ordered
+
+
+def _download_daily(symbol: str, period: str):
+    return yf.download(
         symbol,
         period=period,
         interval="1d",
@@ -64,12 +77,34 @@ def _build_chart_base64(title: str, symbol: str, period: str = "6mo") -> str:
         progress=False,
         threads=False,
     )
-    if data.empty:
-        raise ValueError(f"No market data returned for {symbol}")
 
-    close = data["Close"].dropna()
-    if close.empty:
-        raise ValueError(f"No closing price data available for {symbol}")
+
+def _build_chart_base64(title: str, symbol: str, period: str = "6mo") -> str | None:
+    for try_period in _periods_to_try(period):
+        data = _download_daily(symbol, try_period)
+        if data.empty:
+            continue
+        close = data["Close"]
+        if getattr(close, "ndim", 1) > 1:
+            close = close.iloc[:, 0]
+        close = close.dropna()
+        if close.empty:
+            continue
+        if try_period != period:
+            logger.info(
+                "Chart for %s: no data for period=%r, using period=%r instead",
+                symbol,
+                period,
+                try_period,
+            )
+        break
+    else:
+        logger.warning(
+            "Skipping chart for %s (%s): no Yahoo Finance daily data for any tried period",
+            symbol,
+            title,
+        )
+        return None
 
     ma20 = _rolling_average(close, 20)
     ma50 = _rolling_average(close, 50)
@@ -121,6 +156,15 @@ def generate_market_charts(
     charts: Dict[str, str] = {}
 
     for name, symbol in _combined_symbols(watchlist_entries):
-        charts[symbol] = _build_chart_base64(name, symbol, period=period)
+        chart_b64 = _build_chart_base64(name, symbol, period=period)
+        if chart_b64 is None:
+            continue
+        charts[symbol] = chart_b64
+
+    if not charts:
+        raise ValueError(
+            "No charts could be generated: Yahoo Finance returned no usable daily data "
+            "for any symbol (defaults + watchlist). Check symbols and CHART_PERIOD."
+        )
 
     return charts
