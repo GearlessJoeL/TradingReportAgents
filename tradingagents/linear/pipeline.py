@@ -168,7 +168,7 @@ class LinearDebateRuntime:
                 "count": transcript.count,
             },
         }
-        return create_research_manager(self.quick_llm)(state)["investment_plan"]
+        return create_research_manager(self.deep_llm)(state)["investment_plan"]
 
 
 def _message_text(response: Any) -> str:
