@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -60,7 +60,8 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
     ticker = os.environ.get("REPORT_TICKER", "NVDA").strip().upper()
-    trade_date = os.environ.get("REPORT_DATE", datetime.utcnow().strftime("%Y-%m-%d")).strip()
+    report_date_raw = os.environ.get("REPORT_DATE", "").strip()
+    trade_date = report_date_raw or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     lookback_days = int(os.environ.get("NEWS_LOOKBACK_DAYS", "7"))
     watchlist_path = os.environ.get("WATCHLIST_PATH", "watchlist.txt")
     chart_period = os.environ.get("CHART_PERIOD", "6mo")
