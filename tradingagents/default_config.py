@@ -41,7 +41,7 @@ DEFAULT_CONFIG = {
     "deep_think_llm": "deepseek/deepseek-v4-flash",
     "quick_think_llm": "deepseek/deepseek-v4-flash",
     # Vision-in via chat/completions; use a model that reliably accepts image_url payloads.
-    "chart_llm": "google/gemini-2.0-flash-001",
+    "chart_llm": "openai/gpt-image-1-mini",
     # When None, each provider's client falls back to its own default endpoint
     # (OpenRouter → openrouter.ai/api/v1, OpenAI → api.openai.com, etc.).
     # The CLI overrides this per provider when the user picks one.
