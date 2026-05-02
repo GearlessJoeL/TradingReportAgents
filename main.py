@@ -29,20 +29,9 @@ def _message_text(response) -> str:
     return str(content).strip()
 
 
-def _fetch_news(ticker: str, trade_date: str, lookback_days: int) -> tuple[str, str, str]:
-    trade_dt = datetime.strptime(trade_date, "%Y-%m-%d")
-    start_date = (trade_dt - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
-    company_news = route_to_vendor("get_news", ticker, start_date, trade_date)
-    global_news = route_to_vendor("get_global_news", trade_date, lookback_days, 5)
-    merged = "\n\n".join(
-        [
-            "## Company News",
-            company_news.strip(),
-            "## Global News",
-            global_news.strip(),
-        ]
-    )
-    return company_news, global_news, merged
+def _fetch_global_news(trade_date: str, lookback_days: int) -> str:
+    global_news = route_to_vendor("get_global_news", trade_date, lookback_days, 10)
+    return global_news.strip()
 
 
 def _write_chart_files(charts_base64: dict[str, str], output_dir: Path) -> list[Path]:
@@ -55,11 +44,20 @@ def _write_chart_files(charts_base64: dict[str, str], output_dir: Path) -> list[
     return chart_paths
 
 
+def _format_movers_section(significant_movers: list[tuple[str, str, float]]) -> str:
+    if not significant_movers:
+        return "No watchlist stocks moved more than the significance threshold yesterday."
+    lines = []
+    for name, symbol, pct in significant_movers:
+        direction = "up" if pct >= 0 else "down"
+        lines.append(f"- **{name}** ({symbol}): {direction} {abs(pct):.1f}%")
+    return "Significant movers (previous trading day):\n" + "\n".join(lines)
+
+
 def main() -> None:
     load_dotenv()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
-    ticker = os.environ.get("REPORT_TICKER", "NVDA").strip().upper()
     report_date_raw = os.environ.get("REPORT_DATE", "").strip()
     trade_date = report_date_raw or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     lookback_days = int(os.environ.get("NEWS_LOOKBACK_DAYS", "7"))
@@ -91,27 +89,28 @@ def main() -> None:
         base_url=base_url,
     ).get_llm()
 
-    # Step A: fetch company and global news.
-    company_news, global_news, merged_news_report = _fetch_news(
-        ticker=ticker,
-        trade_date=trade_date,
-        lookback_days=lookback_days,
-    )
+    # Step A: fetch global market news.
+    global_news = _fetch_global_news(trade_date=trade_date, lookback_days=lookback_days)
 
     # Step B: generate charts and run vision analysis.
-    charts_base64 = generate_market_charts(watchlist_path=watchlist_path, period=chart_period)
+    charts_base64, significant_movers = generate_market_charts(
+        watchlist_path=watchlist_path, period=chart_period
+    )
     chart_paths = _write_chart_files(charts_base64, charts_output_dir)
+    movers_section = _format_movers_section(significant_movers)
+
     chart_analysis = VisionAnalyst(
         base_url=config.get("backend_url"),
         text_model=config["deep_think_llm"],
         chart_model=config["chart_llm"],
     ).analyze_charts(charts_base64)
 
-    # Step C: run one bull/bear debate pass using news context.
+    # Step C: run one bull/bear debate pass on the overall market.
+    news_context = f"## Global Market News\n{global_news}\n\n## Significant Stock Movers\n{movers_section}"
     debate_context = DebatePromptContext(
         market_research_report="(not provided in this synchronous pipeline)",
         sentiment_report="(not provided in this synchronous pipeline)",
-        news_report=merged_news_report,
+        news_report=news_context,
         fundamentals_report="(not provided in this synchronous pipeline)",
         history="",
         current_response="",
@@ -128,43 +127,94 @@ def main() -> None:
     bear_argument = _message_text(deep_llm.invoke(build_bear_prompt(debate_context)))
 
     # Step D: synthesize into final markdown report.
-    synthesis_prompt = f"""You are preparing a final client-facing trading markdown report.
+    synthesis_system = """\
+You are an elite, autonomous Financial System Analyst and Portfolio Manager. \
+Your objective is to synthesize daily financial news, market data, and technical analysis \
+into a high-quality, actionable, and noise-free Daily Market Report for an institutional investor.
 
-Ticker: {ticker}
+You must be objective, concise, and focus exclusively on high-impact events. \
+Do not provide financial advice or execute trades. Your goal is strictly information synthesis and risk assessment.
+
+## Core Responsibilities
+
+### Step 1: The Macro Market Summary (The "Top Down" View)
+Review the news context and overall index performance. Provide a single, concise paragraph \
+summarizing the overarching theme of yesterday's market (e.g. "Risk-on sentiment driven by \
+dovish Fed commentary," or "Tech sector drag due to semiconductor supply chain fears").
+
+### Step 2: Significant News Filtering & Micro Analysis
+Review the provided news items. Ruthlessly filter out noise — ignore standard PR announcements, \
+minor analyst upgrades, and low-impact geopolitical noise. Select only the most significant news \
+items (maximum 3-5) that have a direct, material impact on the broader market or specific sectors. \
+For each selected item, provide a 2-3 sentence analysis detailing why it matters and its potential \
+ripple effects.
+
+### Step 3: Watchlist Volatility Trigger & Deep Dive
+Review the watchlist price action data. Identify any equity with a daily price change (positive or \
+negative) of >= 5%. For every triggered equity: state the ticker and the exact percentage change; \
+cross-reference the news context to explain the catalyst for the move; integrate any provided \
+technical analysis to state whether the move broke key support/resistance levels. Use the bull and \
+bear perspectives to add depth to your catalyst analysis.
+"""
+
+    synthesis_user = f"""\
 Analysis date: {trade_date}
 
-Company news:
-{company_news}
-
-Global news:
+## Input 1: Macro News Context
 {global_news}
 
+## Input 2: Watchlist Price Action
+{movers_section}
+
+## Input 3: Visual Technical Analysis
 Chart visual summary:
 {chart_analysis["visual_summary"]}
 
 Technical chart analysis:
 {chart_analysis["technical_analysis"]}
 
+## Input 4: Bull/Bear Market Perspectives
 Bull argument:
 {bull_argument}
 
 Bear argument:
 {bear_argument}
 
-Write a concise markdown report with sections:
-1) Executive Summary
-2) News Takeaways
-3) Chart + Technical Read
-4) Bull vs Bear Debate
-5) Final Stance (Buy/Overweight/Hold/Underweight/Sell with rationale)
-6) Risks and What to Watch Next Week
+## Output Format (Strict Adherence Required)
+Format your final output strictly in Markdown using this structure:
+
+# 📈 Daily Market Report - {trade_date}
+
+## 🌐 Macro Market Overview
+[A concise, 3-4 sentence summary of yesterday's overall market action and primary drivers.]
+
+## 📰 High-Impact Catalysts
+* **[Event/Headline 1]**: [Your brief, sharp analysis of its impact.]
+* **[Event/Headline 2]**: [Your brief, sharp analysis of its impact.]
+
+## 🚨 Watchlist Volatility Alerts (>5% Move)
+*(If no stocks triggered the 5% threshold, output: "No watchlist equities experienced a >5% move yesterday.")*
+
+* **[$TICKER]**: [+X% / -Y%]
+    * *Catalyst:* [Explanation of the move]
+    * *Technical Context:* [Integration of chart data, if applicable]
+
+---
+*Disclaimer: This report is auto-generated for research purposes only and does not constitute financial advice.*
 """
-    final_report = _message_text(quick_llm.invoke(synthesis_prompt))
+    final_report = _message_text(
+        quick_llm.invoke(
+            [
+                ("system", synthesis_system),
+                ("human", synthesis_user),
+            ]
+        )
+    )
     print(final_report)
 
     image_buffers = [path.read_bytes() for path in chart_paths]
     notify_report(
-        subject=f"{ticker} Trading Report - {trade_date}",
+        subject=f"Daily Market Report - {trade_date}",
         markdown_text=final_report,
         image_buffers=image_buffers,
     )
