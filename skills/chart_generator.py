@@ -2,18 +2,20 @@ from __future__ import annotations
 
 import base64
 import logging
+import os
 from io import BytesIO
 from pathlib import Path
 from typing import Dict, Iterable, List, Tuple
 
 import matplotlib
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 import yfinance as yf
 
 matplotlib.use("Agg")
 
 logger = logging.getLogger(__name__)
-
 
 DEFAULT_MARKET_SYMBOLS: Dict[str, str] = {
     "S&P 500": "^GSPC",
@@ -21,6 +23,8 @@ DEFAULT_MARKET_SYMBOLS: Dict[str, str] = {
     "Crude Oil": "CL=F",
     "Gold": "GC=F",
 }
+
+SIGNIFICANT_CHANGE_PCT = float(os.environ.get("SIGNIFICANT_CHANGE_PCT", "5.0"))
 
 
 def _parse_watchlist(watchlist_path: str | Path) -> List[Tuple[str, str]]:
@@ -52,12 +56,6 @@ def _parse_watchlist(watchlist_path: str | Path) -> List[Tuple[str, str]]:
     return entries
 
 
-def _rolling_average(close_series, window: int):
-    if close_series.shape[0] < window:
-        return None
-    return close_series.rolling(window=window).mean()
-
-
 def _periods_to_try(primary: str) -> List[str]:
     """Prefer the configured period, then shorter windows Yahoo often still has."""
     fallbacks = ["3mo", "1mo", "5d", "1y", "max"]
@@ -68,27 +66,28 @@ def _periods_to_try(primary: str) -> List[str]:
     return ordered
 
 
-def _download_daily(symbol: str, period: str):
+def _download_weekly(symbol: str, period: str) -> pd.DataFrame:
     return yf.download(
         symbol,
         period=period,
-        interval="1d",
+        interval="1wk",
         auto_adjust=True,
         progress=False,
         threads=False,
     )
 
 
-def _build_chart_base64(title: str, symbol: str, period: str = "6mo") -> str | None:
+def _get_weekly_changes(symbol: str, period: str) -> pd.Series | None:
+    """Download weekly data and return percent change per week."""
     for try_period in _periods_to_try(period):
-        data = _download_daily(symbol, try_period)
+        data = _download_weekly(symbol, try_period)
         if data.empty:
             continue
         close = data["Close"]
         if getattr(close, "ndim", 1) > 1:
             close = close.iloc[:, 0]
         close = close.dropna()
-        if close.empty:
+        if len(close) < 2:
             continue
         if try_period != period:
             logger.info(
@@ -97,30 +96,39 @@ def _build_chart_base64(title: str, symbol: str, period: str = "6mo") -> str | N
                 period,
                 try_period,
             )
-        break
-    else:
+        pct_change = close.pct_change().dropna() * 100
+        return pct_change
+    return None
+
+
+def _has_significant_change(weekly_pct: pd.Series, threshold: float) -> bool:
+    """Check if any recent week had a move exceeding the threshold."""
+    if weekly_pct.empty:
+        return False
+    return bool((weekly_pct.abs() >= threshold).any())
+
+
+def _build_weekly_chart_base64(title: str, symbol: str, period: str = "6mo") -> str | None:
+    """Build a weekly gain/drop bar chart and return base64 PNG."""
+    weekly_pct = _get_weekly_changes(symbol, period)
+    if weekly_pct is None or weekly_pct.empty:
         logger.warning(
-            "Skipping chart for %s (%s): no Yahoo Finance daily data for any tried period",
+            "Skipping chart for %s (%s): no usable weekly data",
             symbol,
             title,
         )
         return None
 
-    ma20 = _rolling_average(close, 20)
-    ma50 = _rolling_average(close, 50)
+    colors = ["#22c55e" if v >= 0 else "#ef4444" for v in weekly_pct.values]
 
     fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(close.index, close.values, label="Close", linewidth=1.8)
-    if ma20 is not None:
-        ax.plot(ma20.index, ma20.values, label="MA 20", linewidth=1.2, linestyle="--")
-    if ma50 is not None:
-        ax.plot(ma50.index, ma50.values, label="MA 50", linewidth=1.2, linestyle="-.")
-
-    ax.set_title(f"{title} ({symbol})")
-    ax.set_xlabel("Date")
-    ax.set_ylabel("Price")
-    ax.grid(True, alpha=0.2)
-    ax.legend()
+    dates = weekly_pct.index
+    ax.bar(dates, weekly_pct.values, color=colors, width=5, edgecolor="none")
+    ax.axhline(0, color="gray", linewidth=0.8)
+    ax.set_title(f"{title} ({symbol}) — Weekly Change %")
+    ax.set_xlabel("Week")
+    ax.set_ylabel("Change (%)")
+    ax.grid(True, alpha=0.2, axis="y")
     fig.autofmt_xdate()
 
     buffer = BytesIO()
@@ -146,24 +154,47 @@ def _combined_symbols(watchlist: Iterable[Tuple[str, str]]) -> List[Tuple[str, s
 def generate_market_charts(
     watchlist_path: str | Path = "watchlist.txt",
     period: str = "6mo",
+    significance_threshold: float | None = None,
 ) -> Dict[str, str]:
-    """Generate market charts and return base64-encoded PNGs.
+    """Generate weekly gain/drop bar charts and return base64-encoded PNGs.
+
+    Charts are always generated for the 4 default indexes (S&P 500, Nasdaq 100,
+    Crude Oil, Gold). Watchlist stocks are only charted if they had at least one
+    week with a change exceeding the significance threshold.
 
     Returns:
         Dict[str, str]: Keyed by symbol, values are raw base64 PNG strings.
     """
+    threshold = significance_threshold if significance_threshold is not None else SIGNIFICANT_CHANGE_PCT
     watchlist_entries = _parse_watchlist(watchlist_path)
+    default_symbols = set(s.upper() for s in DEFAULT_MARKET_SYMBOLS.values())
     charts: Dict[str, str] = {}
 
     for name, symbol in _combined_symbols(watchlist_entries):
-        chart_b64 = _build_chart_base64(name, symbol, period=period)
+        is_default = symbol.upper() in default_symbols
+
+        if not is_default:
+            weekly_pct = _get_weekly_changes(symbol, period)
+            if weekly_pct is None:
+                logger.info("Skipping %s (%s): no weekly data available", symbol, name)
+                continue
+            if not _has_significant_change(weekly_pct, threshold):
+                logger.info(
+                    "Skipping %s (%s): no week exceeded %.1f%% threshold",
+                    symbol,
+                    name,
+                    threshold,
+                )
+                continue
+
+        chart_b64 = _build_weekly_chart_base64(name, symbol, period=period)
         if chart_b64 is None:
             continue
         charts[symbol] = chart_b64
 
     if not charts:
         raise ValueError(
-            "No charts could be generated: Yahoo Finance returned no usable daily data "
+            "No charts could be generated: Yahoo Finance returned no usable weekly data "
             "for any symbol (defaults + watchlist). Check symbols and CHART_PERIOD."
         )
 
