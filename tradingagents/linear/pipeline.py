@@ -25,10 +25,10 @@ from tradingagents.llm_clients import create_llm_client
 from .runtime_interfaces import DebateContext, DebateTranscript, run_bull_bear_debate
 
 try:
-    from skills.notifier import send_telegram_report
+    from skills.notifier import notify_report
 except ModuleNotFoundError:
-    def send_telegram_report(markdown_text: str, image_buffers: list | None = None) -> bool:  # noqa: ARG001
-        return False
+    def notify_report(subject: str, markdown_text: str, image_buffers: list | None = None) -> None:  # noqa: ARG001
+        return None
 
 
 @dataclass(frozen=True)
@@ -97,7 +97,10 @@ class LinearDebateRuntime:
         )
 
         investment_plan = self._summarize_debate(ticker=ticker, transcript=transcript)
-        send_telegram_report(markdown_text=investment_plan)
+        notify_report(
+            subject=f"{ticker} debate summary - {trade_date}",
+            markdown_text=investment_plan,
+        )
 
         final_state = {
             "company_of_interest": ticker,
