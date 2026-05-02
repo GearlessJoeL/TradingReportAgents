@@ -5,7 +5,7 @@ Requires: GitHub CLI (`gh`) installed and authenticated (`gh auth login`).
 
 Mappings match `.github/workflows/daily_agent.yml`:
   - Secrets: API keys, Telegram tokens, SMTP credentials.
-  - Variables: report paths, notifier toggles, EMAILS_FILE, SMTP_USE_TLS.
+  - Variables: report paths, notifier toggles, EMAILS_FILE, SMTP_USE_TLS, LLM_* model settings.
   - Local `emails.txt` / `watchlist.txt` (if present and non-empty) are pushed to secrets
     `EMAILS_TXT` / `WATCHLIST_TXT` by default so CI can recreate them. GitHub never shows
     secret values in the UI—only that the name exists. Use `--no-runtime-files` to skip.
@@ -61,6 +61,11 @@ VARIABLE_KEYS: frozenset[str] = frozenset(
         "NOTIFY_EMAIL",
         "EMAILS_FILE",
         "SMTP_USE_TLS",
+        "LLM_PROVIDER",
+        "LLM_DEEP_THINK_MODEL",
+        "LLM_QUICK_THINK_MODEL",
+        "LLM_CHART_MODEL",
+        "LLM_BACKEND_URL",
     }
 )
 

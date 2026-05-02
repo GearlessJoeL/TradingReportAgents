@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from rich.console import Console
 from rich.markdown import Markdown
 
-from tradingagents.default_config import DEFAULT_CONFIG
+from tradingagents.default_config import DEFAULT_CONFIG, apply_llm_env_overrides
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 
 load_dotenv()
@@ -39,6 +39,7 @@ def analyze(
     ),
 ):
     config = DEFAULT_CONFIG.copy()
+    apply_llm_env_overrides(config)
     config["max_debate_rounds"] = rounds
 
     graph = TradingAgentsGraph(config=config, debug=False)

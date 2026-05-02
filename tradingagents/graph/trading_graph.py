@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from tradingagents.default_config import DEFAULT_CONFIG
+from tradingagents.default_config import DEFAULT_CONFIG, apply_llm_env_overrides
 from tradingagents.linear.pipeline import LinearDebateRuntime
 
 
@@ -26,7 +26,8 @@ class TradingAgentsGraph:
         self.selected_analysts = selected_analysts or ["market", "social", "news", "fundamentals"]
         self.debug = debug
         self.callbacks = callbacks or []
-        self.config = config or DEFAULT_CONFIG.copy()
+        self.config = DEFAULT_CONFIG.copy() if not config else dict(config)
+        apply_llm_env_overrides(self.config)
         self._runtime = LinearDebateRuntime(self.config)
         self.curr_state: dict[str, Any] | None = None
 

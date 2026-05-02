@@ -101,4 +101,9 @@ jobs:
           NOTIFY_EMAIL: ${{ vars.NOTIFY_EMAIL }}
           EMAILS_FILE: ${{ vars.EMAILS_FILE }}
           SMTP_USE_TLS: ${{ vars.SMTP_USE_TLS }}
+          LLM_PROVIDER: ${{ vars.LLM_PROVIDER }}
+          LLM_DEEP_THINK_MODEL: ${{ vars.LLM_DEEP_THINK_MODEL }}
+          LLM_QUICK_THINK_MODEL: ${{ vars.LLM_QUICK_THINK_MODEL }}
+          LLM_CHART_MODEL: ${{ vars.LLM_CHART_MODEL }}
+          LLM_BACKEND_URL: ${{ vars.LLM_BACKEND_URL }}
         run: python main.py
