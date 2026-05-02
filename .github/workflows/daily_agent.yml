@@ -22,6 +22,58 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # emails.txt / watchlist.txt are gitignored locally; materialize them in CI from secrets.
+      # Create repo secrets EMAILS_TXT and WATCHLIST_TXT (full file contents, multiline OK).
+      - name: Write emails.txt and watchlist.txt from secrets
+        env:
+          EMAILS_TXT: ${{ secrets.EMAILS_TXT }}
+          WATCHLIST_TXT: ${{ secrets.WATCHLIST_TXT }}
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          emails = os.environ.get("EMAILS_TXT", "")
+          watch = os.environ.get("WATCHLIST_TXT", "")
+
+          if emails.strip():
+              Path("emails.txt").write_text(emails, encoding="utf-8", newline="\n")
+          if watch.strip():
+              Path("watchlist.txt").write_text(watch, encoding="utf-8", newline="\n")
+          PY
+
+      # GitHub never shows secret values; this only confirms files/recipient *count*.
+      - name: Report emails.txt / watchlist.txt (no addresses printed)
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def recipient_lines(path: Path) -> int:
+              if not path.is_file():
+                  return 0
+              n = 0
+              for raw in path.read_text(encoding="utf-8").splitlines():
+                  line = raw.split("#", 1)[0].strip()
+                  if line and "@" in line:
+                      n += 1
+              return n
+
+          def ticker_lines(path: Path) -> int:
+              if not path.is_file():
+                  return 0
+              n = 0
+              for raw in path.read_text(encoding="utf-8").splitlines():
+                  line = raw.strip()
+                  if line and not line.startswith("#"):
+                      n += 1
+              return n
+
+          ep, wp = Path("emails.txt"), Path("watchlist.txt")
+          ec, wc = recipient_lines(ep), ticker_lines(wp)
+          print(f"emails.txt: {'present' if ep.is_file() else 'missing'}; lines with @: {ec}")
+          print(f"watchlist.txt: {'present' if wp.is_file() else 'missing'}; non-comment lines: {wc}")
+          PY
+
       - name: Run daily agent
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}

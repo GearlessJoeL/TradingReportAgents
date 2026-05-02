@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import logging
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -56,6 +57,7 @@ def _write_chart_files(charts_base64: dict[str, str], output_dir: Path) -> list[
 
 def main() -> None:
     load_dotenv()
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 
     ticker = os.environ.get("REPORT_TICKER", "NVDA").strip().upper()
     trade_date = os.environ.get("REPORT_DATE", datetime.utcnow().strftime("%Y-%m-%d")).strip()
