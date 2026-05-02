@@ -43,6 +43,8 @@ def _markdown_to_email_html(text: str) -> str:
   blockquote {{ border-left: 4px solid #90caf9; margin: 12px 0; padding: 8px 16px;
                background: #e3f2fd; }}
   strong {{ color: #0d47a1; }}
+  img {{ max-width: 100%; height: auto; border-radius: 6px; margin: 12px 0 4px 0;
+         display: block; }}
 </style>
 </head>
 <body>
