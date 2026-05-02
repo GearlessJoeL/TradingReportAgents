@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 
 from agents.vision_analyst import VisionAnalyst
 from skills.chart_generator import generate_market_charts
-from skills.notifier import send_telegram_report
+from skills.notifier import notify_report
 from tradingagents.agents.researchers.prompts import (
     DebatePromptContext,
     build_bear_prompt,
@@ -155,7 +155,11 @@ Write a concise markdown report with sections:
     print(final_report)
 
     image_buffers = [path.read_bytes() for path in chart_paths]
-    send_telegram_report(markdown_text=final_report, image_buffers=image_buffers)
+    notify_report(
+        subject=f"{ticker} Trading Report - {trade_date}",
+        markdown_text=final_report,
+        image_buffers=image_buffers,
+    )
 
 
 if __name__ == "__main__":
