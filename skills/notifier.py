@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import logging
 import os
+import re
 import smtplib
 import ssl
 from email.header import Header
@@ -15,6 +16,31 @@ from typing import BinaryIO
 import httpx
 
 logger = logging.getLogger(__name__)
+
+_TELEGRAM_MAX_LENGTH = 4096
+
+
+def _escape_markdown_v2(text: str) -> str:
+    """Escape special characters for Telegram MarkdownV2 parse mode."""
+    special_chars = r"_*[]()~`>#+-=|{}.!\\"
+    return re.sub(f"([{re.escape(special_chars)}])", r"\\\1", text)
+
+
+def _split_text(text: str, max_len: int = _TELEGRAM_MAX_LENGTH) -> list[str]:
+    """Split text into chunks that fit within Telegram's message limit."""
+    if len(text) <= max_len:
+        return [text]
+    chunks: list[str] = []
+    while text:
+        if len(text) <= max_len:
+            chunks.append(text)
+            break
+        split_at = text.rfind("\n", 0, max_len)
+        if split_at == -1:
+            split_at = max_len
+        chunks.append(text[:split_at])
+        text = text[split_at:].lstrip("\n")
+    return chunks
 
 
 def _env_truthy(name: str, default: str = "false") -> bool:
@@ -57,16 +83,16 @@ def send_telegram_report(markdown_text: str, image_buffers: list | None = None) 
 
     try:
         with httpx.Client(timeout=30.0) as client:
-            message_response = client.post(
-                f"{base_url}/sendMessage",
-                json={
-                    "chat_id": chat_id,
-                    "text": markdown_text,
-                    "parse_mode": "Markdown",
-                    "disable_web_page_preview": True,
-                },
-            )
-            message_response.raise_for_status()
+            for chunk in _split_text(markdown_text):
+                message_response = client.post(
+                    f"{base_url}/sendMessage",
+                    json={
+                        "chat_id": chat_id,
+                        "text": chunk,
+                        "disable_web_page_preview": True,
+                    },
+                )
+                message_response.raise_for_status()
 
             for index, image in enumerate(image_buffers, start=1):
                 image_bytes = _to_bytes(image)
