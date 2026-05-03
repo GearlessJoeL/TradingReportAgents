@@ -263,6 +263,11 @@ def main() -> None:
         model=config["quick_think_llm"],
         base_url=base_url,
     ).get_llm()
+    chart_llm = create_llm_client(
+        provider=provider,
+        model=config["chart_llm"],
+        base_url=base_url,
+    ).get_llm()
 
     # Step A: fetch global market news.
     global_news = _fetch_global_news(trade_date=trade_date, lookback_days=lookback_days)
@@ -282,9 +287,8 @@ def main() -> None:
     )
 
     chart_analysis = VisionAnalyst(
-        base_url=config.get("backend_url"),
-        text_model=config["deep_think_llm"],
-        chart_model=config["chart_llm"],
+        chart_llm=chart_llm,
+        text_llm=deep_llm,
     ).analyze_charts(charts_base64, news_context=chart_symbol_news)
 
     # Step C: run one bull/bear debate pass on the overall market.
