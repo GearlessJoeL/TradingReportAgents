@@ -1,97 +1,45 @@
 from __future__ import annotations
 
 import logging
-import os
-from typing import Dict, List, Optional
+from typing import Any, Dict, List
 
-import httpx
-
-from tradingagents.default_config import DEFAULT_CONFIG, apply_llm_env_overrides
+from langchain_core.messages import HumanMessage
 
 logger = logging.getLogger(__name__)
 
 
+def _message_content_text(message: Any) -> str:
+    """Extract plain text from an AIMessage-style object (handles string or block lists)."""
+    content = getattr(message, "content", "")
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: List[str] = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict):
+                if block.get("type") == "text" and "text" in block:
+                    parts.append(str(block["text"]))
+                elif "text" in block:
+                    parts.append(str(block["text"]))
+                elif block.get("type") == "output_text" and block.get("output_text") is not None:
+                    parts.append(str(block["output_text"]))
+        return "\n".join(parts).strip()
+    if content is None:
+        return ""
+    return str(content).strip()
+
+
 class VisionAnalyst:
-    """Analyze chart images with OpenRouter vision-capable models."""
+    """Analyze chart images with the same LangChain chat model stack as the daily pipeline."""
 
-    def __init__(
-        self,
-        api_key: Optional[str] = None,
-        base_url: Optional[str] = None,
-        text_model: Optional[str] = None,
-        chart_model: Optional[str] = None,
-        timeout_seconds: int = 120,
-    ) -> None:
-        self.api_key = api_key or os.getenv("OPENROUTER_API_KEY")
-        if not self.api_key:
-            raise ValueError("OPENROUTER_API_KEY is required for VisionAnalyst.")
+    def __init__(self, *, chart_llm: Any, text_llm: Any) -> None:
+        self.chart_llm = chart_llm
+        self.text_llm = text_llm
 
-        merged = DEFAULT_CONFIG.copy()
-        apply_llm_env_overrides(merged)
-        resolved_base = (
-            base_url
-            or os.getenv("OPENROUTER_BASE_URL")
-            or merged.get("backend_url")
-            or "https://openrouter.ai/api/v1"
-        )
-        self.base_url = resolved_base.rstrip("/")
-        self.text_model = (
-            text_model
-            or os.getenv("OPENROUTER_VISION_TEXT_MODEL")
-            or merged["deep_think_llm"]
-        )
-        self.chart_model = (
-            chart_model
-            or os.getenv("OPENROUTER_CHART_MODEL")
-            or merged.get("chart_llm")
-            or "moonshotai/kimi-k2.6"
-        )
-        self.timeout_seconds = timeout_seconds
-
-    def _request_chat_completion(
-        self,
-        *,
-        model: str,
-        messages: List[dict],
-        temperature: float = 0.2,
-        max_tokens: int = 1200,
-    ) -> str:
-        referer = os.getenv("OPENROUTER_HTTP_REFERER", "https://localhost").strip() or "https://localhost"
-        app_title = os.getenv("OPENROUTER_APP_TITLE", "TradingReportAgents").strip() or "TradingReportAgents"
-        with httpx.Client(timeout=self.timeout_seconds) as client:
-            response = client.post(
-                f"{self.base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": referer,
-                    "X-Title": app_title,
-                },
-                json={
-                    "model": model,
-                    "messages": messages,
-                    "temperature": temperature,
-                    "max_tokens": max_tokens,
-                },
-            )
-        if response.is_error:
-            body_preview = (response.text or "")[:2000]
-            logger.error(
-                "OpenRouter chat/completions failed model=%s status=%s body=%s",
-                model,
-                response.status_code,
-                body_preview,
-            )
-            raise httpx.HTTPStatusError(
-                f"{response.status_code} for {response.url} model={model!r} — {body_preview}",
-                request=response.request,
-                response=response,
-            )
-        payload = response.json()
-        return payload["choices"][0]["message"]["content"]
-
-    def _build_vision_messages(self, prompt: str, charts_base64: Dict[str, str]) -> List[dict]:
-        content = [{"type": "text", "text": prompt}]
+    def _build_image_content(self, prompt: str, charts_base64: Dict[str, str]) -> List[dict]:
+        content: List[dict] = [{"type": "text", "text": prompt}]
         for symbol, chart_base64 in charts_base64.items():
             content.append({"type": "text", "text": f"Chart symbol: {symbol}"})
             content.append(
@@ -100,12 +48,7 @@ class VisionAnalyst:
                     "image_url": {"url": f"data:image/png;base64,{chart_base64}"},
                 }
             )
-        return [{"role": "user", "content": content}]
-
-    @staticmethod
-    def _build_text_only_messages(prompt: str) -> List[dict]:
-        """Single user message without images (for models that are not vision-capable)."""
-        return [{"role": "user", "content": prompt}]
+        return content
 
     def generate_visual_summary(self, charts_base64: Dict[str, str]) -> str:
         """First pass: vision model extracts visual chart signals."""
@@ -114,13 +57,20 @@ class VisionAnalyst:
             "For each symbol, identify trend direction, momentum behavior, "
             "volatility regime, and notable inflection points."
         )
-        messages = self._build_vision_messages(prompt, charts_base64)
-        return self._request_chat_completion(
-            model=self.chart_model,
-            messages=messages,
-            temperature=0.2,
-            max_tokens=1000,
+        msg = self.chart_llm.invoke(
+            [HumanMessage(content=self._build_image_content(prompt, charts_base64))]
         )
+        text = _message_content_text(msg)
+        if not text:
+            logger.error(
+                "Vision chart_llm returned empty content — is LLM_CHART_MODEL vision-capable?"
+            )
+            raise RuntimeError(
+                "Vision model returned empty content. Set LLM_CHART_MODEL to a model that accepts "
+                "image input on your provider (e.g. openai/gpt-4o, google/gemini-2.0-flash-001 "
+                "on OpenRouter)."
+            )
+        return text
 
     def analyze_charts(
         self,
@@ -157,14 +107,12 @@ class VisionAnalyst:
             f"Visual summary from chart model:\n{visual_summary}"
             f"{news_block}"
         )
-        messages = self._build_text_only_messages(prompt)
-        tech_max_tokens = 2200 if news_block else 1500
-        technical_analysis = self._request_chat_completion(
-            model=self.text_model,
-            messages=messages,
-            temperature=0.1,
-            max_tokens=tech_max_tokens,
-        )
+        msg = self.text_llm.invoke([HumanMessage(content=prompt)])
+        technical_analysis = _message_content_text(msg)
+        if not technical_analysis:
+            raise RuntimeError(
+                "Text model returned empty technical analysis (LLM_DEEP_THINK_MODEL response was empty)."
+            )
         return {
             "visual_summary": visual_summary,
             "technical_analysis": technical_analysis,
