@@ -17,6 +17,12 @@ jobs:
       - name: Check New York local time gate (08:30)
         id: timegate
         run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual trigger detected; bypassing time gate."
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           ny_hm="$(TZ=America/New_York date +%H:%M)"
           echo "Current America/New_York time: ${ny_hm}"
           if [ "${ny_hm}" = "08:30" ]; then
