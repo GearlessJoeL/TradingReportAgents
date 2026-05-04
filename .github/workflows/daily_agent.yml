@@ -2,7 +2,10 @@ name: Daily Agent Run
 
 on:
   schedule:
-    # GitHub Actions cron is UTC; 08:30 EST = 13:30 UTC (Mon-Fri)
+    # GitHub Actions cron is UTC and does not support timezones.
+    # Trigger both possible UTC times for 08:30 America/New_York (EST/EDT),
+    # then gate execution in-job based on local New York time.
+    - cron: "30 12 * * 1-5"
     - cron: "30 13 * * 1-5"
   workflow_dispatch:
 
@@ -11,20 +14,36 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Check New York local time gate (08:30)
+        id: timegate
+        run: |
+          ny_hm="$(TZ=America/New_York date +%H:%M)"
+          echo "Current America/New_York time: ${ny_hm}"
+          if [ "${ny_hm}" = "08:30" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping run: not 08:30 in America/New_York."
+          fi
+
       - name: Checkout repository
+        if: steps.timegate.outputs.should_run == 'true'
         uses: actions/checkout@v4
 
       - name: Set up Python 3.14
+        if: steps.timegate.outputs.should_run == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.14"
 
       - name: Install dependencies
+        if: steps.timegate.outputs.should_run == 'true'
         run: pip install -r requirements.txt
 
       # emails.txt / watchlist.txt are gitignored locally; materialize them in CI from secrets.
       # Create repo secrets EMAILS_TXT and WATCHLIST_TXT (full file contents, multiline OK).
       - name: Write emails.txt and watchlist.txt from secrets
+        if: steps.timegate.outputs.should_run == 'true'
         env:
           EMAILS_TXT: ${{ secrets.EMAILS_TXT }}
           WATCHLIST_TXT: ${{ secrets.WATCHLIST_TXT }}
@@ -44,6 +63,7 @@ jobs:
 
       # GitHub never shows secret values; this only confirms files/recipient *count*.
       - name: Report emails.txt / watchlist.txt (no addresses printed)
+        if: steps.timegate.outputs.should_run == 'true'
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -75,6 +95,7 @@ jobs:
           PY
 
       - name: Run daily agent
+        if: steps.timegate.outputs.should_run == 'true'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
