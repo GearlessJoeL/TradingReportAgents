@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check New York local time gate (08:30)
+      - name: Check New York schedule gate (08:30 local via cron)
         id: timegate
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
@@ -23,13 +23,27 @@ jobs:
             exit 0
           fi
 
-          ny_hm="$(TZ=America/New_York date +%H:%M)"
-          echo "Current America/New_York time: ${ny_hm}"
-          if [ "${ny_hm}" = "08:30" ]; then
+          # Scheduled workflows can start late; do not require exact wall-clock 08:30.
+          # Instead, allow only the cron expression that matches the current NY DST offset.
+          schedule_expr="${{ github.event.schedule }}"
+          ny_offset="$(TZ=America/New_York date +%z)"
+          ny_now="$(TZ=America/New_York date '+%Y-%m-%d %H:%M:%S %Z (%z)')"
+
+          case "${ny_offset}" in
+            -0400) expected_schedule="30 12 * * 1-5" ;; # 08:30 EDT
+            -0500) expected_schedule="30 13 * * 1-5" ;; # 08:30 EST
+            *) expected_schedule="" ;;
+          esac
+
+          echo "Current America/New_York time: ${ny_now}"
+          echo "Event schedule: '${schedule_expr}'"
+          echo "Expected schedule for NY offset ${ny_offset}: '${expected_schedule}'"
+
+          if [ -n "${expected_schedule}" ] && [ "${schedule_expr}" = "${expected_schedule}" ]; then
             echo "should_run=true" >> "$GITHUB_OUTPUT"
           else
             echo "should_run=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping run: not 08:30 in America/New_York."
+            echo "Skipping run: schedule does not match current NY offset."
           fi
 
       - name: Checkout repository
