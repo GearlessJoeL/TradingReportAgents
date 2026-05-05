@@ -3,10 +3,11 @@ name: Daily Agent Run
 on:
   schedule:
     # GitHub Actions cron is UTC and does not support timezones.
-    # Trigger both possible UTC times for 08:30 America/New_York (EST/EDT),
-    # then gate execution in-job based on local New York time.
-    - cron: "30 12 * * 1-5"
-    - cron: "30 13 * * 1-5"
+    # TEMP/testing: trigger at 19:00 America/New_York Mon–Fri (DST-safe).
+    # - EDT 19:00 → 23:00 UTC Mon–Fri (`0 23 * * 1-5`)
+    # - EST 19:00 → 00:00 UTC Tue–Sat (next UTC day); use `0 0 * * 2-6`
+    - cron: "0 23 * * 1-5"
+    - cron: "0 0 * * 2-6"
   workflow_dispatch:
 
 jobs:
@@ -14,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check New York schedule gate (08:30 local via cron)
+      - name: Check New York schedule gate (19:00 local via cron)
         id: timegate
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
@@ -23,15 +24,15 @@ jobs:
             exit 0
           fi
 
-          # Scheduled workflows can start late; do not require exact wall-clock 08:30.
-          # Instead, allow only the cron expression that matches the current NY DST offset.
+          # Scheduled workflows can start late; gate by cron slot vs NY DST offset
+          # (matches the UTC expression that fires at 19:00 local Mon–Fri).
           schedule_expr="${{ github.event.schedule }}"
           ny_offset="$(TZ=America/New_York date +%z)"
           ny_now="$(TZ=America/New_York date '+%Y-%m-%d %H:%M:%S %Z (%z)')"
 
           case "${ny_offset}" in
-            -0400) expected_schedule="30 12 * * 1-5" ;; # 08:30 EDT
-            -0500) expected_schedule="30 13 * * 1-5" ;; # 08:30 EST
+            -0400) expected_schedule="0 23 * * 1-5" ;; # 19:00 EDT
+            -0500) expected_schedule="0 0 * * 2-6" ;; # 19:00 EST (Tue–Sat 00 UTC)
             *) expected_schedule="" ;;
           esac
 
