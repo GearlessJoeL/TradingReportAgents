@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from openai import OpenAI
+from openai import APIStatusError
 
 _PROVIDER_CONFIG = {
     "openai": (None, "OPENAI_API_KEY"),
@@ -77,6 +78,40 @@ class DirectChatClient:
 
         return out
 
+    def _extract_text_content(self, completion: Any) -> str:
+        """Extract assistant text from OpenAI-compatible completion response."""
+        choices = getattr(completion, "choices", None)
+        if not choices:
+            payload = (
+                completion.model_dump()
+                if hasattr(completion, "model_dump")
+                else str(completion)
+            )
+            raise RuntimeError(
+                "LLM completion did not include choices. "
+                f"Response payload: {payload}"
+            )
+
+        first = choices[0]
+        message = getattr(first, "message", None)
+        if message is None:
+            raise RuntimeError("LLM completion choice missing message field.")
+
+        content = getattr(message, "content", "")
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            text_parts: list[str] = []
+            for part in content:
+                if isinstance(part, str):
+                    text_parts.append(part)
+                elif isinstance(part, dict) and part.get("text"):
+                    text_parts.append(str(part["text"]))
+            return "\n".join(text_parts).strip()
+        if content is None:
+            return ""
+        return str(content).strip()
+
     def invoke(self, input_payload: Any, config: Any = None, **kwargs: Any) -> SimpleMessage:
         del config  # compatibility arg
         messages = self._normalize_messages(input_payload)
@@ -91,8 +126,16 @@ class DirectChatClient:
                     messages=messages,
                     **kwargs,
                 )
-                content = completion.choices[0].message.content or ""
-                return SimpleMessage(content=str(content).strip())
+                content = self._extract_text_content(completion)
+                return SimpleMessage(content=content)
+            except APIStatusError as exc:
+                # Retry transient upstream errors, not caller mistakes.
+                if exc.status_code is not None and exc.status_code < 500:
+                    raise
+                last_exc = exc
+                if attempt >= self.max_retries:
+                    raise
+                time.sleep(retry_backoff * (2**attempt))
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
                 if attempt >= self.max_retries:
