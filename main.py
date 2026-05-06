@@ -20,7 +20,7 @@ from tradingagents.agents.researchers.prompts import (
 from tradingagents.dataflows.config import set_config
 from tradingagents.dataflows.interface import route_to_vendor
 from tradingagents.default_config import DEFAULT_CONFIG, apply_llm_env_overrides
-from tradingagents.llm_clients import create_llm_client
+from tradingagents.llm_clients.direct_chat_client import DirectChatClient
 
 
 def _message_text(response) -> str:
@@ -28,6 +28,16 @@ def _message_text(response) -> str:
     if isinstance(content, str):
         return content.strip()
     return str(content).strip()
+
+
+def _build_direct_llm(*, provider: str, model: str, base_url: str | None):
+    return DirectChatClient(
+        provider=provider,
+        model=model,
+        base_url=base_url,
+        timeout=float(os.environ.get("LLM_TIMEOUT_SECONDS", "120")),
+        max_retries=int(os.environ.get("LLM_PARSE_RETRIES", "2")),
+    )
 
 
 def _fetch_global_news(trade_date: str, lookback_days: int) -> str:
@@ -253,21 +263,21 @@ def main() -> None:
 
     provider = config["llm_provider"]
     base_url = config.get("backend_url")
-    deep_llm = create_llm_client(
+    deep_llm = _build_direct_llm(
         provider=provider,
         model=config["deep_think_llm"],
         base_url=base_url,
-    ).get_llm()
-    quick_llm = create_llm_client(
+    )
+    quick_llm = _build_direct_llm(
         provider=provider,
         model=config["quick_think_llm"],
         base_url=base_url,
-    ).get_llm()
-    chart_llm = create_llm_client(
+    )
+    chart_llm = _build_direct_llm(
         provider=provider,
         model=config["chart_llm"],
         base_url=base_url,
-    ).get_llm()
+    )
 
     # Step A: fetch global market news.
     global_news = _fetch_global_news(trade_date=trade_date, lookback_days=lookback_days)

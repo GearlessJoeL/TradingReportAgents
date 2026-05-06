@@ -1,10 +1,15 @@
+import json
+import logging
 import os
+import time
 from typing import Any, Optional
 
 from langchain_openai import ChatOpenAI
 
 from .base_client import BaseLLMClient, normalize_content
 from .validators import validate_model
+
+logger = logging.getLogger(__name__)
 
 
 class NormalizedChatOpenAI(ChatOpenAI):
@@ -16,7 +21,27 @@ class NormalizedChatOpenAI(ChatOpenAI):
     """
 
     def invoke(self, input, config=None, **kwargs):
-        return normalize_content(super().invoke(input, config, **kwargs))
+        # OpenRouter/OpenAI-compatible endpoints can occasionally return a
+        # transient non-JSON body with HTTP 200. Retry parse failures briefly.
+        parse_retries = int(os.environ.get("LLM_PARSE_RETRIES", "2"))
+        backoff_base = float(os.environ.get("LLM_PARSE_RETRY_BACKOFF_SEC", "0.5"))
+
+        for attempt in range(parse_retries + 1):
+            try:
+                return normalize_content(super().invoke(input, config, **kwargs))
+            except json.JSONDecodeError as exc:
+                if attempt >= parse_retries:
+                    raise
+                sleep_s = backoff_base * (2 ** attempt)
+                logger.warning(
+                    "LLM response JSON parse failed (%s). Retrying in %.2fs "
+                    "(attempt %d/%d).",
+                    exc,
+                    sleep_s,
+                    attempt + 1,
+                    parse_retries + 1,
+                )
+                time.sleep(sleep_s)
 
     def with_structured_output(self, schema, *, method=None, **kwargs):
         """Wrap with structured output, defaulting to function_calling for OpenAI.

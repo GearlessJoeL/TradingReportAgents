@@ -3,8 +3,6 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List
 
-from langchain_core.messages import HumanMessage
-
 logger = logging.getLogger(__name__)
 
 
@@ -58,7 +56,7 @@ class VisionAnalyst:
             "volatility regime, and notable inflection points."
         )
         msg = self.chart_llm.invoke(
-            [HumanMessage(content=self._build_image_content(prompt, charts_base64))]
+            [{"role": "user", "content": self._build_image_content(prompt, charts_base64)}]
         )
         text = _message_content_text(msg)
         if not text:
@@ -107,7 +105,7 @@ class VisionAnalyst:
             f"Visual summary from chart model:\n{visual_summary}"
             f"{news_block}"
         )
-        msg = self.text_llm.invoke([HumanMessage(content=prompt)])
+        msg = self.text_llm.invoke([{"role": "user", "content": prompt}])
         technical_analysis = _message_content_text(msg)
         if not technical_analysis:
             raise RuntimeError(
