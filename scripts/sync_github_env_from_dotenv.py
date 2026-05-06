@@ -11,12 +11,52 @@ Mappings match `.github/workflows/daily_agent.yml`:
     secret values in the UI—only that the name exists. Use `--no-runtime-files` to skip.
 
 Usage:
-  python scripts/sync_github_env_from_dotenv.py              # uses .env in cwd
+  # Default behavior:
+  # - Reads `.env` (default: `./.env`, or pass a path)
+  # - For keys in SECRET_KEYS: `gh secret set <KEY>` (value is piped on stdin)
+  # - For keys in VARIABLE_KEYS: `gh variable set <KEY> --body <VALUE>`
+  # - Also pushes local runtime files (see below) unless `--no-runtime-files`
+  python scripts/sync_github_env_from_dotenv.py
+
+  # Use a specific .env file
   python scripts/sync_github_env_from_dotenv.py path/to/.env
-  python scripts/sync_github_env_from_dotenv.py --dry-run
+
+  # Choose a repo explicitly (otherwise gh's current/default context is used)
   python scripts/sync_github_env_from_dotenv.py -R owner/repo
+
+  # Print what would be updated without calling gh
+  python scripts/sync_github_env_from_dotenv.py --dry-run
+
+  # Only push runtime files (skip .env parsing entirely)
   python scripts/sync_github_env_from_dotenv.py --runtime-files-only
+
+  # Skip pushing runtime files (only sync .env -> secrets/variables)
   python scripts/sync_github_env_from_dotenv.py --no-runtime-files
+
+Behavior notes:
+  - Empty values in `.env` are skipped by default. Use `--include-empty` to force syncing empties.
+  - `--secrets-only` syncs only the secret mappings; `--variables-only` syncs only variable mappings.
+  - Unknown keys in `.env` are reported and skipped (to avoid accidentally uploading unintended values).
+  - Runtime files are uploaded as GitHub secrets (never shown in the UI):
+    - `emails.txt` -> secret `EMAILS_TXT`
+    - `watchlist.txt` -> secret `WATCHLIST_TXT`
+
+Examples: sync emails / watchlist runtime files
+  # 1) Create/update local files (one item per line)
+  printf "%s\n" "alice@example.com" "bob@example.com" > emails.txt
+  printf "%s\n" "AAPL" "MSFT" "NVDA" > watchlist.txt
+
+  # 2) Push ONLY runtime files (no .env parsing) into GitHub secrets:
+  #    EMAILS_TXT and WATCHLIST_TXT
+  python scripts/sync_github_env_from_dotenv.py --runtime-files-only -R owner/repo
+
+  # 3) Or push runtime files from custom paths
+  python scripts/sync_github_env_from_dotenv.py --runtime-files-only -R owner/repo \
+    --emails-file path/to/emails.txt \
+    --watchlist-file path/to/watchlist.txt
+
+  # 4) By default, a normal run also pushes runtime files (unless --no-runtime-files)
+  python scripts/sync_github_env_from_dotenv.py -R owner/repo
 
 Empty values are skipped by default (use --include-empty to sync them anyway).
 """
