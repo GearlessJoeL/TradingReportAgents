@@ -3,11 +3,10 @@ name: Daily Agent Run
 on:
   schedule:
     # GitHub Actions cron is UTC and does not support timezones.
-    # TEMP/testing: trigger at 19:00 America/New_York Mon–Fri (DST-safe).
-    # - EDT 19:00 → 23:00 UTC Mon–Fri (`0 23 * * 1-5`)
-    # - EST 19:00 → 00:00 UTC Tue–Sat (next UTC day); use `0 0 * * 2-6`
-    - cron: "0 23 * * 1-5"
-    - cron: "0 0 * * 2-6"
+    # One cron, DST-safe by design:
+    # - Summer (EDT, UTC-4): 08:30 local → 12:30 UTC
+    # - Winter (EST, UTC-5): 07:30 local → 12:30 UTC
+    - cron: "30 12 * * 1-5"
   workflow_dispatch:
 
 jobs:
@@ -15,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check New York schedule gate (19:00 local via cron)
+      - name: Check trigger type (manual vs schedule)
         id: timegate
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
@@ -24,28 +23,11 @@ jobs:
             exit 0
           fi
 
-          # Scheduled workflows can start late; gate by cron slot vs NY DST offset
-          # (matches the UTC expression that fires at 19:00 local Mon–Fri).
-          schedule_expr="${{ github.event.schedule }}"
-          ny_offset="$(TZ=America/New_York date +%z)"
+          # For scheduled runs, always proceed. (Cron is already DST-safe in UTC.)
           ny_now="$(TZ=America/New_York date '+%Y-%m-%d %H:%M:%S %Z (%z)')"
-
-          case "${ny_offset}" in
-            -0400) expected_schedule="0 23 * * 1-5" ;; # 19:00 EDT
-            -0500) expected_schedule="0 0 * * 2-6" ;; # 19:00 EST (Tue–Sat 00 UTC)
-            *) expected_schedule="" ;;
-          esac
-
           echo "Current America/New_York time: ${ny_now}"
-          echo "Event schedule: '${schedule_expr}'"
-          echo "Expected schedule for NY offset ${ny_offset}: '${expected_schedule}'"
-
-          if [ -n "${expected_schedule}" ] && [ "${schedule_expr}" = "${expected_schedule}" ]; then
-            echo "should_run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "should_run=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping run: schedule does not match current NY offset."
-          fi
+          echo "Event: ${{ github.event_name }} (schedule: '${{ github.event.schedule }}')"
+          echo "should_run=true" >> "$GITHUB_OUTPUT"
 
       - name: Checkout repository
         if: steps.timegate.outputs.should_run == 'true'
