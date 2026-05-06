@@ -8,6 +8,11 @@ from typing import Any
 from openai import OpenAI
 from openai import APIStatusError
 
+_ROLE_MAP: dict[str, str] = {
+    "human": "user",
+    "ai": "assistant",
+}
+
 _PROVIDER_CONFIG = {
     "openai": (None, "OPENAI_API_KEY"),
     "xai": ("https://api.x.ai/v1", "XAI_API_KEY"),
@@ -58,12 +63,13 @@ class DirectChatClient:
         out: list[dict[str, Any]] = []
         for item in input_payload:
             if isinstance(item, dict):
-                role = item.get("role", "user")
+                role = _ROLE_MAP.get(item.get("role", "user"), item.get("role", "user"))
                 out.append({"role": role, "content": item.get("content", "")})
                 continue
             if isinstance(item, tuple) and len(item) == 2:
                 role, content = item
-                out.append({"role": str(role), "content": content})
+                role = _ROLE_MAP.get(str(role), str(role))
+                out.append({"role": role, "content": content})
                 continue
 
             # Compatibility with langchain HumanMessage/SystemMessage objects.
