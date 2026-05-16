@@ -79,7 +79,7 @@ If you add imports beyond what `requirements.txt` lists, update that file (or ch
 | `skills/notifier.py` | Telegram + SMTP helpers. |
 | `tradingagents/linear/` | Stateless linear runtime (news + debate + summary); used by tests and related tooling. |
 | `tradingagents/` | Shared config, dataflows, LLM clients, researcher prompts, etc. |
-| `cli/` | Optional **`tradingagents`** Typer CLI (full upstream-style analysis flows). |
+| `cli/` | Optional **`tradingagents`** Typer CLI (linear debate runtime). |
 
 ---
 
@@ -98,9 +98,15 @@ See **`POST_REFACTOR_VERIFICATION.md`** for criteria. Release notes for the unde
 
 ---
 
+## Upstream sync
+
+Shared `tradingagents/` modules are periodically merged from [TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents) (latest sync: **v0.2.5** — sentiment analyst, expanded LLM providers, `TRADINGAGENTS_*` env overrides, configurable news fetch, Ollama remote URL, and related fixes). The daily report pipeline (`main.py`, vision charts, notifier, GitHub Actions) remains fork-specific.
+
+---
+
 ## Optional: full `TradingAgents` package
 
-This tree still contains the broader **TradingAgents** graph, CLI, and configuration surface (`pyproject.toml`, `cli/main.py`). For programmatic use of the full graph, see upstream docs and `tradingagents/default_config.py`. This README focuses on the **TradingReportAgents** daily report path.
+This tree still contains upstream graph modules, LLM clients, and configuration (`pyproject.toml`, `tradingagents/graph/setup.py`). The simplified **`tradingagents`** CLI runs the linear debate runtime. This README focuses on the **TradingReportAgents** daily report path.
 
 ---
 

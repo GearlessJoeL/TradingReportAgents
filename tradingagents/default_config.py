@@ -3,7 +3,20 @@ from typing import Any, Dict
 
 _TRADINGAGENTS_HOME = os.path.join(os.path.expanduser("~"), ".tradingagents")
 
-# Map .env keys (LLM_*) onto DEFAULT_CONFIG keys. Values in .env.example match defaults.
+# Upstream TRADINGAGENTS_* env-var overlay (applied at import).
+_ENV_OVERRIDES = {
+    "TRADINGAGENTS_LLM_PROVIDER": "llm_provider",
+    "TRADINGAGENTS_DEEP_THINK_LLM": "deep_think_llm",
+    "TRADINGAGENTS_QUICK_THINK_LLM": "quick_think_llm",
+    "TRADINGAGENTS_LLM_BACKEND_URL": "backend_url",
+    "TRADINGAGENTS_OUTPUT_LANGUAGE": "output_language",
+    "TRADINGAGENTS_MAX_DEBATE_ROUNDS": "max_debate_rounds",
+    "TRADINGAGENTS_MAX_RISK_ROUNDS": "max_risk_discuss_rounds",
+    "TRADINGAGENTS_CHECKPOINT_ENABLED": "checkpoint_enabled",
+    "TRADINGAGENTS_BENCHMARK_TICKER": "benchmark_ticker",
+}
+
+# Fork-specific LLM_* keys (applied at runtime via apply_llm_env_overrides).
 _LLM_ENV_TO_CONFIG: tuple[tuple[str, str], ...] = (
     ("LLM_PROVIDER", "llm_provider"),
     ("LLM_DEEP_THINK_MODEL", "deep_think_llm"),
@@ -11,6 +24,27 @@ _LLM_ENV_TO_CONFIG: tuple[tuple[str, str], ...] = (
     ("LLM_CHART_MODEL", "chart_llm"),
     ("LLM_BACKEND_URL", "backend_url"),
 )
+
+
+def _coerce(value: str, reference):
+    """Coerce env-var string to the type of the existing default value."""
+    if isinstance(reference, bool):
+        return value.strip().lower() in ("true", "1", "yes", "on")
+    if isinstance(reference, int) and not isinstance(reference, bool):
+        return int(value)
+    if isinstance(reference, float):
+        return float(value)
+    return value
+
+
+def _apply_env_overrides(config: dict) -> dict:
+    """Apply TRADINGAGENTS_* env vars to the config dict in-place."""
+    for env_var, key in _ENV_OVERRIDES.items():
+        raw = os.environ.get(env_var)
+        if raw is None or raw == "":
+            continue
+        config[key] = _coerce(raw, config.get(key))
+    return config
 
 
 def apply_llm_env_overrides(config: Dict[str, Any]) -> Dict[str, Any]:
@@ -31,45 +65,50 @@ def apply_llm_env_overrides(config: Dict[str, Any]) -> Dict[str, Any]:
     return config
 
 
-DEFAULT_CONFIG = {
+DEFAULT_CONFIG = _apply_env_overrides({
     "project_dir": os.path.abspath(os.path.join(os.path.dirname(__file__), ".")),
     "results_dir": os.getenv("TRADINGAGENTS_RESULTS_DIR", os.path.join(_TRADINGAGENTS_HOME, "logs")),
     "data_cache_dir": os.getenv("TRADINGAGENTS_CACHE_DIR", os.path.join(_TRADINGAGENTS_HOME, "cache")),
     # LLM settings — all models routed through OpenRouter by default.
-    # Override llm_provider / model names to use a different gateway.
     "llm_provider": "openrouter",
-    # Deep: reasoning-grade synthesis and domain analysis (not the flash tier).
-    # Override with e.g. deepseek/deepseek-r1 on OpenRouter for maximal explicit reasoning.
     "deep_think_llm": "deepseek/deepseek-v4-pro",
-    # Quick: fast tool-heavy loops and lighter downstream formatting where appropriate.
     "quick_think_llm": "deepseek/deepseek-v4-flash",
-    # Vision-in via chat/completions; use a model that reliably accepts image_url payloads.
     "chart_llm": "moonshotai/kimi-k2.6",
-    # When None, each provider's client falls back to its own default endpoint
-    # (OpenRouter → openrouter.ai/api/v1, OpenAI → api.openai.com, etc.).
-    # The CLI overrides this per provider when the user picks one.
     "backend_url": None,
-    # Provider-specific thinking configuration
-    "google_thinking_level": None,      # "high", "minimal", etc.
-    "openai_reasoning_effort": None,    # "medium", "high", "low"
-    "anthropic_effort": None,           # "high", "medium", "low"
-    # Output language for analyst reports and final decision
-    # Internal agent debate stays in English for reasoning quality
+    "google_thinking_level": None,
+    "openai_reasoning_effort": None,
+    "anthropic_effort": None,
+    "checkpoint_enabled": False,
     "output_language": "English",
-    # Debate and discussion settings
     "max_debate_rounds": 1,
     "max_risk_discuss_rounds": 1,
     "max_recur_limit": 100,
-    # Data vendor configuration
-    # Category-level configuration (default for all tools in category)
+    "news_article_limit": 20,
+    "global_news_article_limit": 10,
+    "global_news_lookback_days": 7,
+    "global_news_queries": [
+        "Federal Reserve interest rates inflation",
+        "S&P 500 earnings GDP economic outlook",
+        "geopolitical risk trade war sanctions",
+        "ECB Bank of England BOJ central bank policy",
+        "oil commodities supply chain energy",
+    ],
     "data_vendors": {
-        "core_stock_apis": "yfinance",       # Options: alpha_vantage, yfinance
-        "technical_indicators": "yfinance",  # Options: alpha_vantage, yfinance
-        "fundamental_data": "yfinance",      # Options: alpha_vantage, yfinance
-        "news_data": "yfinance",             # Options: alpha_vantage, yfinance
+        "core_stock_apis": "yfinance",
+        "technical_indicators": "yfinance",
+        "fundamental_data": "yfinance",
+        "news_data": "yfinance",
     },
-    # Tool-level configuration (takes precedence over category-level)
-    "tool_vendors": {
-        # Example: "get_stock_data": "alpha_vantage",  # Override category default
+    "tool_vendors": {},
+    "benchmark_ticker": None,
+    "benchmark_map": {
+        ".NS": "^NSEI",
+        ".BO": "^BSESN",
+        ".T": "^N225",
+        ".HK": "^HSI",
+        ".L": "^FTSE",
+        ".TO": "^GSPTSE",
+        ".AX": "^AXJO",
+        "": "SPY",
     },
-}
+})

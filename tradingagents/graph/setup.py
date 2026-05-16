@@ -54,8 +54,9 @@ class GraphSetup:
             tool_nodes["market"] = self.tool_nodes["market"]
 
         if "social" in selected_analysts:
-            analyst_nodes["social"] = create_social_media_analyst(
-                self.deep_thinking_llm
+            # "social" selector key preserved for back-compat; agent is sentiment_analyst.
+            analyst_nodes["social"] = create_sentiment_analyst(
+                self.quick_thinking_llm
             )
             delete_nodes["social"] = create_msg_delete()
             tool_nodes["social"] = self.tool_nodes["social"]
