@@ -30,6 +30,37 @@ def _message_text(response) -> str:
     return str(content).strip()
 
 
+def _env_int(name: str, default: int) -> int:
+    """Parse an integer env var; fall back when missing/empty/invalid."""
+    raw = os.environ.get(name, "")
+    if raw is None:
+        return default
+    value = raw.strip()
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        logging.warning("Invalid integer for %s=%r; using default %s", name, raw, default)
+        return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    """Parse a boolean env var with common truthy/falsey values."""
+    raw = os.environ.get(name, "")
+    if raw is None:
+        return default
+    value = raw.strip().lower()
+    if not value:
+        return default
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    logging.warning("Invalid boolean for %s=%r; using default %s", name, raw, default)
+    return default
+
+
 def _safe_invoke_text(primary_llm, fallback_llm, prompt, *, stage: str) -> str:
     """Invoke primary LLM and fall back to secondary LLM on failure."""
     try:
@@ -382,7 +413,7 @@ def main() -> None:
 
     report_date_raw = os.environ.get("REPORT_DATE", "").strip()
     trade_date = report_date_raw or datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    lookback_days = int(os.environ.get("NEWS_LOOKBACK_DAYS", "7"))
+    lookback_days = _env_int("NEWS_LOOKBACK_DAYS", 7)
     watchlist_path = os.environ.get("WATCHLIST_PATH", "watchlist.txt")
     chart_period = os.environ.get("CHART_PERIOD", "6mo")
     charts_output_dir = Path(os.environ.get("CHART_OUTPUT_DIR", "output/charts"))
@@ -426,7 +457,7 @@ def main() -> None:
     chart_paths = _write_chart_files(charts_base64, charts_output_dir)
     movers_section = _format_movers_section(significant_movers)
 
-    chart_news_lookback = int(os.environ.get("CHART_NEWS_LOOKBACK_DAYS", str(lookback_days)))
+    chart_news_lookback = _env_int("CHART_NEWS_LOOKBACK_DAYS", lookback_days)
     chart_symbol_news = _fetch_chart_symbol_news(
         list(charts_base64.keys()),
         trade_date=trade_date,
@@ -589,13 +620,8 @@ Synthesize ALL inputs above and format your response STRICTLY in Markdown using 
         ],
         stage="final_synthesis",
     )
-    max_review_rounds = int(os.environ.get("REPORT_REVIEW_MAX_ROUNDS", "2"))
-    strict_review = os.environ.get("REPORT_REVIEW_STRICT", "true").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    )
+    max_review_rounds = _env_int("REPORT_REVIEW_MAX_ROUNDS", 2)
+    strict_review = _env_bool("REPORT_REVIEW_STRICT", True)
     review_issues = _review_report_completeness(final_report, charts_base64, chart_display)
     for attempt in range(1, max_review_rounds + 1):
         if not review_issues:
