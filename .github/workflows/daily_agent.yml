@@ -3,30 +3,106 @@ name: Daily Agent Run
 on:
   schedule:
     # GitHub Actions cron is UTC and does not support timezones.
-    # One cron, DST-safe by design:
-    # - Summer (EDT, UTC-4): 08:30 local → 12:30 UTC
-    # - Winter (EST, UTC-5): 07:30 local → 12:30 UTC
-    - cron: "30 12 * * 1-5"
+    # Requested EDT schedule (UTC-4):
+    # - Primary: 06:00 ET -> 10:00 UTC
+    # - Fallback: 07:00 ET -> 11:00 UTC
+    - cron: "0 10 * * 1-5"
+    - cron: "0 11 * * 1-5"
   workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: daily-agent-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   run-agent:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - name: Check trigger type (manual vs schedule)
         id: timegate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "Manual trigger detected; bypassing time gate."
             echo "should_run=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          # For scheduled runs, always proceed. (Cron is already DST-safe in UTC.)
+          schedule="${{ github.event.schedule }}"
+          echo "Event: ${{ github.event_name }} (schedule: '${schedule}')"
           ny_now="$(TZ=America/New_York date '+%Y-%m-%d %H:%M:%S %Z (%z)')"
           echo "Current America/New_York time: ${ny_now}"
-          echo "Event: ${{ github.event_name }} (schedule: '${{ github.event.schedule }}')"
+
+          # For the 07:00 ET fallback, only run if the 06:00 ET scheduled run
+          # has not completed successfully today on this branch.
+          if [ "${schedule}" = "0 11 * * 1-5" ]; then
+            python - <<'PY'
+            import datetime as dt
+            import json
+            import os
+            import urllib.request
+
+            token = os.environ["GH_TOKEN"]
+            repo = os.environ["GITHUB_REPOSITORY"]
+            workflow = os.environ["GITHUB_WORKFLOW"]
+            ref_name = os.environ.get("GITHUB_REF_NAME", "")
+            today = dt.datetime.now(dt.timezone.utc).date().isoformat()
+
+            url = f"https://api.github.com/repos/{repo}/actions/runs?event=schedule&per_page=50"
+            req = urllib.request.Request(
+                url,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/vnd.github+json",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                },
+            )
+
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+
+            should_run = True
+            for run in payload.get("workflow_runs", []):
+                if run.get("name") != workflow:
+                    continue
+                if ref_name and run.get("head_branch") != ref_name:
+                    continue
+                started = run.get("run_started_at") or run.get("created_at") or ""
+                if not started.startswith(today):
+                    continue
+                if run.get("conclusion") != "success":
+                    continue
+                event = (run.get("event") or "").lower()
+                if event != "schedule":
+                    continue
+                # Match the 10:00 UTC window for primary 06:00 ET run.
+                if len(started) >= 13 and started[11:13] == "10":
+                    should_run = False
+                    break
+
+            out_path = os.environ["GITHUB_OUTPUT"]
+            with open(out_path, "a", encoding="utf-8") as f:
+                f.write(f"should_run={'true' if should_run else 'false'}\n")
+
+            print(
+                "Fallback gate:",
+                "running 07:00 ET job (06:00 ET success not found today)"
+                if should_run
+                else "skipping 07:00 ET job (06:00 ET already succeeded today)",
+            )
+            PY
+            exit 0
+          fi
+
+          # Primary 06:00 ET schedule proceeds.
           echo "should_run=true" >> "$GITHUB_OUTPUT"
 
       - name: Checkout repository
@@ -97,7 +173,7 @@ jobs:
           print(f"watchlist.txt: {'present' if wp.is_file() else 'missing'}; non-comment lines: {wc}")
           PY
 
-      - name: Run daily agent
+      - name: Run daily agent (with retry/backoff)
         if: steps.timegate.outputs.should_run == 'true'
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
@@ -130,4 +206,41 @@ jobs:
           LLM_QUICK_THINK_MODEL: ${{ vars.LLM_QUICK_THINK_MODEL }}
           LLM_CHART_MODEL: ${{ vars.LLM_CHART_MODEL }}
           LLM_BACKEND_URL: ${{ vars.LLM_BACKEND_URL }}
-        run: python main.py
+          REPORT_REVIEW_MAX_ROUNDS: ${{ vars.REPORT_REVIEW_MAX_ROUNDS }}
+          REPORT_REVIEW_STRICT: ${{ vars.REPORT_REVIEW_STRICT }}
+          CI_MAX_ATTEMPTS: ${{ vars.CI_MAX_ATTEMPTS }}
+          CI_RETRY_BACKOFF_SECONDS: ${{ vars.CI_RETRY_BACKOFF_SECONDS }}
+        run: |
+          set -euo pipefail
+          mkdir -p output
+          attempts="${CI_MAX_ATTEMPTS:-2}"
+          backoff="${CI_RETRY_BACKOFF_SECONDS:-20}"
+          if [ "$attempts" -lt 1 ]; then
+            attempts=1
+          fi
+          for i in $(seq 1 "$attempts"); do
+            echo "Run attempt $i/$attempts"
+            if python main.py | tee "output/latest_report_attempt_${i}.md"; then
+              cp "output/latest_report_attempt_${i}.md" output/latest_report.md
+              echo "Daily agent run succeeded on attempt $i."
+              exit 0
+            fi
+            if [ "$i" -lt "$attempts" ]; then
+              sleep_secs=$(( backoff * i ))
+              echo "Attempt $i failed; retrying in ${sleep_secs}s..."
+              sleep "$sleep_secs"
+            fi
+          done
+          echo "Daily agent failed after $attempts attempt(s)."
+          exit 1
+
+      - name: Upload run artifacts
+        if: always() && steps.timegate.outputs.should_run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-agent-${{ github.run_id }}
+          if-no-files-found: warn
+          retention-days: 7
+          path: |
+            output/**/*.md
+            output/**/*.png
