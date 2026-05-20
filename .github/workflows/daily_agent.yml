@@ -41,8 +41,8 @@ jobs:
           ny_now="$(TZ=America/New_York date '+%Y-%m-%d %H:%M:%S %Z (%z)')"
           echo "Current America/New_York time: ${ny_now}"
 
-          # For the 07:00 ET fallback, only run if the 06:00 ET scheduled run
-          # has not completed successfully today on this branch.
+          # For the 07:00 ET fallback, only run if there has not been any
+          # successful scheduled run on this branch within the past 2 hours.
           if [ "${schedule}" = "0 11 * * 1-5" ]; then
           python - <<'PY'
           import datetime as dt
@@ -54,7 +54,8 @@ jobs:
           repo = os.environ["GITHUB_REPOSITORY"]
           workflow = os.environ["GITHUB_WORKFLOW"]
           ref_name = os.environ.get("GITHUB_REF_NAME", "")
-          today = dt.datetime.now(dt.timezone.utc).date().isoformat()
+          now_utc = dt.datetime.now(dt.timezone.utc)
+          two_hours_ago = now_utc - dt.timedelta(hours=2)
 
           url = f"https://api.github.com/repos/{repo}/actions/runs?event=schedule&per_page=50"
           req = urllib.request.Request(
@@ -69,24 +70,32 @@ jobs:
           with urllib.request.urlopen(req, timeout=30) as resp:
               payload = json.loads(resp.read().decode("utf-8"))
 
-          should_run = True
+          recent_success = False
           for run in payload.get("workflow_runs", []):
               if run.get("name") != workflow:
                   continue
               if ref_name and run.get("head_branch") != ref_name:
                   continue
-              started = run.get("run_started_at") or run.get("created_at") or ""
-              if not started.startswith(today):
-                  continue
-              if run.get("conclusion") != "success":
-                  continue
               event = (run.get("event") or "").lower()
               if event != "schedule":
                   continue
-              # Match the 10:00 UTC window for primary 06:00 ET run.
-              if len(started) >= 13 and started[11:13] == "10":
-                  should_run = False
+              if (run.get("conclusion") or "").lower() != "success":
+                  continue
+              ts = run.get("updated_at") or run.get("run_started_at") or run.get("created_at")
+              if not ts:
+                  continue
+              try:
+                  completed_or_updated_at = dt.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+              except ValueError:
+                  continue
+              if completed_or_updated_at >= two_hours_ago:
+                  recent_success = True
                   break
+
+          # Fallback behavior:
+          # - Skip when any successful scheduled run happened in the past 2 hours.
+          # - Otherwise run fallback.
+          should_run = not recent_success
 
           out_path = os.environ["GITHUB_OUTPUT"]
           with open(out_path, "a", encoding="utf-8") as f:
@@ -94,9 +103,9 @@ jobs:
 
           print(
               "Fallback gate:",
-              "running 07:00 ET job (06:00 ET success not found today)"
+              "running 07:00 ET job (no successful scheduled run in past 2 hours)"
               if should_run
-              else "skipping 07:00 ET job (06:00 ET already succeeded today)",
+              else "skipping 07:00 ET job (successful scheduled run found in past 2 hours)",
           )
           PY
           exit 0
